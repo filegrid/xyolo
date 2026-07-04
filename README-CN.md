@@ -1,4 +1,4 @@
-# xyolo
+# XYolo
 
 `xyolo` 是一个 YOLO 训练启动脚本，支持：
 
@@ -17,7 +17,7 @@
 - `datasets/`：数据集配置
 - `runs/`：训练输出
 - `web/configs/`：Web 保存的参数文件
-- `web/tasks/`：Web 生成的任务、日志和 dstack spec
+- `web/tasks/`：Web 生成的任务和日志
 
 这些目录默认都会自动创建，**不需要先手动建**。
 
@@ -172,32 +172,58 @@ Docker 默认后台运行；如果要前台看日志：
 ./xyolo web --host 0.0.0.0 --port 8860
 ```
 
-启动后页面里可以：
+前端技术栈使用：
 
-1. 从 `models/` 和 `datasets/` 里选择模型、数据集
-2. 直接填写训练参数
-3. 选择已有参数文件，或者在页面里保存新的参数文件
-4. 创建任务并自动后台启动
-5. 查看任务状态和日志
+- **Vite**
+- **React**
+- **pnpm**
+- **shadcn/ui**
+
+执行 `xyolo web` 时，如果前端依赖还没装好，会自动安装并重新构建前端。
+
+启动后页面是 **单页训练界面**。
+
+右上角提供：
+
+- **环境信息** 入口
+- **dstack** 入口
+- **SwanLab** 入口
+- **中英文切换**
+- **主题切换**：跟随系统 / 浅色 / 深色
+
+语言和主题选择会写入 cookie。
+
+当主题选择为 **跟随系统** 时，会真正跟随系统深浅色变化。
+
+训练页面内部再分成两类：
+
+1. **新建**
+2. **列表**
+
+训练表单分成：
+
+- **基础设置**
+- **高级设置**（默认隐藏）
+
+模型和数据集各自都是 **一个输入框**：既能从本地候选里下拉，也能直接输入官方模型名或自定义路径。
+
+整个流程只保留 **一个名字**。创建任务时自动生成，并同步复用到训练输出和相关任务元数据里。
 
 Web 任务会生成：
 
 - `web/tasks/<task-id>.json`：任务描述
 - `web/tasks/<task-id>.log`：训练日志
-- `web/tasks/<task-id>.dstack.yml`：启用 dstack 时生成
+- `web/drafts/<draft-id>.json`：暂存
+- `web/templates/<template-id>.json`：模板
 
 ### Web 参数文件
 
 页面支持两种方式：
 
 1. **直接填写参数**
-2. **使用参数文件**
+2. **使用 YAML 参数文件**
 
-参数文件支持：
-
-- `yaml`
-- `json`
-- `key=value` 文本
+参数文件固定只支持 **YAML**。
 
 示例 YAML：
 
@@ -208,87 +234,30 @@ lr0: 0.005
 close_mosaic: 10
 ```
 
-示例 key=value：
-
-```text
-epochs=300
-batch=4
-lr0=0.005
-close_mosaic=10
-```
-
 ## SwanLab 用法
 
-Web 页面支持直接开启 **SwanLab**。
+页面右上角保留了 **SwanLab** 入口。
 
-启用后可填写：
-
-- `SwanLab project`
-- `SwanLab workspace`
-- `SwanLab experiment`
-- `SwanLab API key`
-- `SwanLab description`
-
-### venv 模式下的 SwanLab
-
-Web 任务会改为走 `Ultralytics + SwanLab callback`：
-
-```python
-from ultralytics import YOLO
-from swanlab.integration.ultralytics import add_swanlab_callback
-```
-
-然后训练时自动把指标打到 SwanLab。
-
-### docker 模式下的 SwanLab
-
-Web 任务会在容器里先安装 `swanlab`，再运行集成脚本，所以 docker 任务也可以直接在页面里启用 SwanLab。
+点击时，后端会尝试通过 Docker 拉起 SwanLab，并在成功后打开对应地址。
 
 ### SwanLab 兼容性说明
 
-当前本地环境是 **Python 3.14**。  
-Web 页面已经提示兼容性状态：
+当前本地环境是 **Python 3.14**，所以这里不再走本地 Python 包路径。
 
-- **docker 模式更推荐**
-- **venv 模式下本地 SwanLab 回调可能因为 Python 版本报错**
-
-如果你要稳定使用本地 SwanLab，建议把本地 Python 切到 **3.10 - 3.13**。
+当前实现改成优先走 Docker。  
+如果直接访问 Docker 失败，后端还会再尝试 `sudo -n docker`。如果还是失败，页面会直接把失败原因显示出来。
 
 ## dstack 用法
 
-Web 页面支持：
+页面右上角保留了 **dstack** 入口。
 
-1. **生成 dstack 任务文件**
-2. **尝试自动提交 dstack**
-
-启用后会在 `web/tasks/` 下生成：
-
-```bash
-<task-id>.dstack.yml
-```
-
-生成内容会基于当前任务自动拼出：
-
-- 任务名
-- working_dir
-- GPU 资源
-- `./xyolo ...` 启动命令
-- SwanLab API key（如果填了）
-
-如果勾选了 **自动提交 dstack**，会执行：
-
-```bash
-python -m dstack apply -f web/tasks/<task-id>.dstack.yml -d -y
-```
+点击时，后端会尝试通过 Docker 拉起 dstack，并在成功后打开对应地址。
 
 ### dstack 兼容性说明
 
-当前安装的 `dstack` 包本身 **不支持 Python 3.14**。所以目前：
+当前安装的 `dstack` Python 包本身 **不支持 Python 3.14**，所以入口改成优先走 Docker 路径。
 
-- **生成 `.dstack.yml` 没问题**
-- **本地自动提交可能失败**
-
-如果要稳定自动提交 dstack，建议使用 **Python 3.10 - 3.13** 的虚拟环境。
+如果直接访问 Docker 失败，后端还会再尝试 `sudo -n docker`。如果还是失败，页面会直接显示具体错误。
 
 ## 可选参数
 

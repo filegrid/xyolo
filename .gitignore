@@ -16,7 +16,11 @@ models/
 # Generated outputs
 runs/
 web/configs/
+web/drafts/
+web/templates/
 web/tasks/
+web/ui/dist/
+web/ui/node_modules/
 *.log
 
 # Editor and OS files

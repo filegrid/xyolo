@@ -3,21 +3,71 @@
 from __future__ import annotations
 
 import argparse
-import html
 import json
-import os
+import mimetypes
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import parse_qs, urlparse
 
 import yaml
+
+
+TOOL_SPECS = {
+    "dstack": {
+        "display_name": "dstack",
+        "url": "http://127.0.0.1:3000",
+        "container_name": "xyolo-dstack",
+        "docker_command": [
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            "xyolo-dstack",
+            "-p",
+            "127.0.0.1:3000:3000",
+            "dstackai/dstack:latest",
+            "server",
+            "--host",
+            "0.0.0.0",
+            "-p",
+            "3000",
+        ],
+        "help_message": "Requires a working Docker daemon with current-user access.",
+    },
+    "swanlab": {
+        "display_name": "SwanLab",
+        "url": "http://127.0.0.1:5092",
+        "container_name": "xyolo-swanlab",
+        "docker_command": [
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            "xyolo-swanlab",
+            "-p",
+            "127.0.0.1:5092:5092",
+            "-v",
+            "{RUNS_DIR}:/app/runs",
+            "python:3.12-slim",
+            "bash",
+            "-lc",
+            "pip install -q 'swanlab[dashboard]' && mkdir -p /app/runs/swanlab && swanlab watch /app/runs/swanlab -h 0.0.0.0 -p 5092",
+        ],
+        "help_message": "Requires a working Docker daemon with current-user access.",
+    },
+}
 
 
 def now_iso() -> str:
@@ -26,6 +76,32 @@ def now_iso() -> str:
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+DOCKER_BASE_COMMAND = ["docker"]
+DEFAULT_TRAIN_DOCKER_IMAGE = "ultralytics/ultralytics:latest"
+PRIMARY_PACKAGE_NAMES = (
+    "ultralytics",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "opencv-python",
+    "opencv-python-headless",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "PyYAML",
+    "dstack",
+    "swanlab",
+)
 
 
 class AppConfig:
@@ -38,9 +114,12 @@ class AppConfig:
         self.web_dir = project_root / "web"
         self.tasks_dir = self.web_dir / "tasks"
         self.configs_dir = self.web_dir / "configs"
+        self.drafts_dir = self.web_dir / "drafts"
+        self.templates_dir = self.web_dir / "templates"
+        self.ui_dist_dir = self.web_dir / "ui" / "dist"
         self.worker_script = self.web_dir / "task_worker.py"
-        self.xyolo_script = project_root / "xyolo"
-        self.compatibility = self._build_compatibility()
+        self.python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
         for path in (
             self.models_dir,
             self.datasets_dir,
@@ -48,17 +127,127 @@ class AppConfig:
             self.web_dir,
             self.tasks_dir,
             self.configs_dir,
+            self.drafts_dir,
+            self.templates_dir,
         ):
             ensure_dir(path)
 
-    def _build_compatibility(self) -> dict[str, str]:
-        version = sys.version_info
-        details = {
-            "python": f"{version.major}.{version.minor}.{version.micro}",
-            "dstack": "ready" if (3, 10) <= version[:2] < (3, 14) else "python_unsupported",
-            "swanlab": "ready" if version[:2] < (3, 14) else "python_warning",
+    def environment(self) -> list[dict[str, str]]:
+        return [
+            {"label": "Project root", "value": self.project_root.as_posix()},
+            {"label": "Python", "value": self.python_version},
+            {"label": "Models dir", "value": self.models_dir.as_posix()},
+            {"label": "Datasets dir", "value": self.datasets_dir.as_posix()},
+            {"label": "Runs dir", "value": self.runs_dir.as_posix()},
+        ]
+
+
+def format_tree_line(name: str, prefix: str, is_last: bool) -> str:
+    branch = "└── " if is_last else "├── "
+    return f"{prefix}{branch}{name}"
+
+
+def project_tree(config: AppConfig) -> str:
+    root_name = config.project_root.name
+    lines = [f"{root_name}/  # XYolo project root"]
+    top_level = [
+        ("datasets/  # dataset YAML files and related assets", []),
+        ("models/  # model weights and checkpoints", []),
+        ("runs/  # training outputs", []),
+        ("venv/  # local Python environment", []),
+        (
+            "web/  # web backend and frontend",
+            [
+                ("configs/  # saved YAML parameter files", []),
+                ("drafts/  # saved drafts", []),
+                ("tasks/  # task metadata and logs", []),
+                ("templates/  # reusable templates", []),
+                (
+                    "ui/  # Vite React frontend",
+                    [
+                        ("src/  # frontend source files", []),
+                        ("dist/  # built static assets", []),
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+    def append_nodes(nodes: list[tuple[str, list[Any]]], prefix: str) -> None:
+        for index, (name, children) in enumerate(nodes):
+            is_last = index == len(nodes) - 1
+            lines.append(format_tree_line(name, prefix, is_last))
+            if children:
+                child_prefix = f"{prefix}{'    ' if is_last else '│   '}"
+                append_nodes(children, child_prefix)
+
+    append_nodes(top_level, "")
+    return "\n".join(lines)
+
+
+def installed_packages(config: AppConfig) -> list[dict[str, str]]:
+    python_executable = config.venv_dir / "bin" / "python"
+    executable = python_executable if python_executable.exists() else Path(sys.executable)
+    try:
+        result = subprocess.run(
+            [str(executable), "-m", "pip", "list", "--format=json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout or "[]")
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
+        return []
+    packages = [
+        {
+            "name": str(item.get("name", "")),
+            "version": str(item.get("version", "")),
         }
-        return details
+        for item in payload
+        if item.get("name")
+    ]
+    primary = [item for item in packages if item["name"] in PRIMARY_PACKAGE_NAMES]
+    primary.sort(key=lambda item: PRIMARY_PACKAGE_NAMES.index(item["name"]))
+    return primary
+
+
+def docker_image_status(image_name: str) -> str:
+    accessible, reason = docker_accessible()
+    if not accessible:
+        return reason or "Docker unavailable"
+    result = subprocess.run(
+        [*current_docker_base(), "image", "inspect", image_name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return "local" if result.returncode == 0 else "missing"
+
+
+def docker_images_overview() -> list[dict[str, str]]:
+    images = [
+        {"purpose": "training", "image": DEFAULT_TRAIN_DOCKER_IMAGE},
+        {"purpose": "dstack", "image": "dstackai/dstack:latest"},
+        {"purpose": "swanlab", "image": "python:3.12-slim"},
+    ]
+    return [
+        {
+            "purpose": item["purpose"],
+            "image": item["image"],
+            "status": docker_image_status(item["image"]),
+        }
+        for item in images
+    ]
+
+
+def environment_details(config: AppConfig) -> dict[str, Any]:
+    return {
+        "python_version": config.python_version,
+        "project_tree": project_tree(config),
+        "docker_images": docker_images_overview(),
+        "packages": installed_packages(config),
+    }
 
 
 def list_files(base: Path, suffixes: tuple[str, ...]) -> list[str]:
@@ -72,17 +261,6 @@ def list_files(base: Path, suffixes: tuple[str, ...]) -> list[str]:
             continue
         items.append(path.relative_to(base).as_posix())
     return items
-
-
-def load_tasks(config: AppConfig) -> list[dict[str, Any]]:
-    tasks: list[dict[str, Any]] = []
-    for path in sorted(config.tasks_dir.glob("*.json"), reverse=True):
-        try:
-            tasks.append(json.loads(path.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
-            continue
-    tasks.sort(key=lambda task: task.get("created_at", ""), reverse=True)
-    return tasks
 
 
 def parse_scalar(value: str) -> Any:
@@ -106,36 +284,54 @@ def parse_key_value_text(text: str) -> dict[str, Any]:
     return parsed
 
 
+def make_generated_name(prefix: str = "xyolo") -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if prefix == "xyolo":
+        return f"{prefix}-{timestamp}"
+    return f"{prefix}-{timestamp}-{uuid.uuid4().hex[:4]}"
+
+
+def load_record_list(base: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in sorted(base.glob("*.json"), reverse=True):
+        try:
+            records.append(read_json(path))
+        except json.JSONDecodeError:
+            continue
+    records.sort(key=lambda item: item.get("updated_at", item.get("created_at", "")), reverse=True)
+    return records
+
+
+def summarize_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": record["id"],
+        "name": record["name"],
+        "created_at": record.get("created_at", ""),
+        "updated_at": record.get("updated_at", record.get("created_at", "")),
+        "mode": record.get("form", {}).get("mode", "venv"),
+        "model": record.get("form", {}).get("model", ""),
+        "data": record.get("form", {}).get("data", ""),
+        "status": record.get("status", ""),
+    }
+
+
 def load_config_values(config: AppConfig, filename: str) -> tuple[dict[str, Any], str | None]:
     if not filename:
         return {}, None
     path = (config.configs_dir / filename).resolve()
     if config.configs_dir.resolve() not in path.parents or not path.is_file():
         raise ValueError("invalid config file")
+    if path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ValueError("only yaml config files are supported")
 
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
-        data = json.loads(text)
-    elif path.suffix.lower() in {".yaml", ".yml"}:
-        data = yaml.safe_load(text) or {}
-    else:
-        data = parse_key_value_text(text)
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError("config file must contain a key/value mapping")
     return data, path.relative_to(config.project_root).as_posix()
 
 
-def save_config_text(config: AppConfig, name: str, text: str, fmt: str) -> str:
-    safe_name = Path(name).name.strip()
-    if not safe_name:
-        raise ValueError("missing config file name")
-    if fmt == "json" and not safe_name.endswith(".json"):
-        safe_name += ".json"
-    elif fmt == "yaml" and not safe_name.endswith((".yaml", ".yml")):
-        safe_name += ".yaml"
-    elif fmt == "kv" and not safe_name.endswith(".txt"):
-        safe_name += ".txt"
-    path = config.configs_dir / safe_name
+def save_yaml_config(config: AppConfig, name: str, text: str) -> str:
+    path = config.configs_dir / f"{name}.yaml"
     path.write_text(text.strip() + "\n", encoding="utf-8")
     return path.relative_to(config.project_root).as_posix()
 
@@ -162,43 +358,54 @@ def stringify_cli_value(value: Any) -> str:
     return str(value)
 
 
-def task_id() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+def normalize_form(raw: dict[str, Any]) -> dict[str, str]:
+    fields = {
+        "name": "",
+        "mode": "venv",
+        "model": "",
+        "data": "",
+        "epochs": "200",
+        "batch": "8",
+        "imgsz": "640",
+        "device": "",
+        "workers": "",
+        "optimizer": "",
+        "resume": "",
+        "cache": "",
+        "patience": "",
+        "config_file": "",
+        "config_text": "",
+        "extra_args": "",
+        "notes": "",
+    }
+    normalized = {key: str(raw.get(key, default) or default) for key, default in fields.items()}
+    mode = normalized["mode"].strip() or "venv"
+    if mode not in {"venv", "docker"}:
+        raise ValueError("mode must be venv or docker")
+    normalized["mode"] = mode
+    normalized["name"] = normalized["name"].strip() or make_generated_name()
+    if not normalized["model"].strip():
+        raise ValueError("model is required")
+    if not normalized["data"].strip():
+        raise ValueError("dataset is required")
+    return normalized
 
 
-def build_task(form: dict[str, str], config: AppConfig) -> dict[str, Any]:
-    config_values, config_source = load_config_values(config, form.get("config_file", ""))
-    save_source = None
+def create_launch_task(config: AppConfig, form: dict[str, str]) -> dict[str, Any]:
+    name = form["name"].strip() or make_generated_name()
+    config_values, config_source = load_config_values(config, form.get("config_file", "").strip())
     config_text = form.get("config_text", "").strip()
     if config_text:
-        save_source = save_config_text(
-            config,
-            form.get("config_name", ""),
-            config_text,
-            form.get("config_format", "yaml"),
-        )
-        if form.get("config_format", "yaml") == "json":
-            inline_values = json.loads(config_text)
-        elif form.get("config_format", "yaml") == "yaml":
-            inline_values = yaml.safe_load(config_text) or {}
-        else:
-            inline_values = parse_key_value_text(config_text)
+        inline_values = yaml.safe_load(config_text) or {}
         if not isinstance(inline_values, dict):
-            raise ValueError("inline config must contain key/value pairs")
+            raise ValueError("yaml config must contain a key/value mapping")
         config_values.update(inline_values)
-        config_source = save_source
-
-    model_input = (form.get("model_custom") or form.get("model_select") or "").strip()
-    dataset_input = (form.get("dataset_custom") or form.get("dataset_select") or "").strip()
-    if not model_input:
-        raise ValueError("model is required")
-    if not dataset_input:
-        raise ValueError("dataset is required")
+        config_source = save_yaml_config(config, name, config_text)
 
     params: dict[str, Any] = {}
     params.update(config_values)
-    params["model"] = resolve_default_path(config, config.models_dir, model_input)
-    params["data"] = resolve_default_path(config, config.datasets_dir, dataset_input)
+    params["model"] = resolve_default_path(config, config.models_dir, form["model"].strip())
+    params["data"] = resolve_default_path(config, config.datasets_dir, form["data"].strip())
 
     for key in ("epochs", "batch", "imgsz", "workers", "patience"):
         value = form.get(key, "").strip()
@@ -209,61 +416,54 @@ def build_task(form: dict[str, str], config: AppConfig) -> dict[str, Any]:
         if value:
             params[key] = parse_scalar(value)
 
-    run_name = form.get("run_name", "").strip() or f"task-{datetime.now().strftime('%m%d-%H%M%S')}"
-    params["name"] = run_name
+    params["name"] = name
     params["project"] = "runs"
     params.update(parse_key_value_text(form.get("extra_args", "")))
     params["model"] = resolve_default_path(config, config.models_dir, params["model"])
     params["data"] = resolve_default_path(config, config.datasets_dir, params["data"])
 
-    train_args = [f"{key}={stringify_cli_value(value)}" for key, value in params.items() if value not in ("", None)]
-    task_name = form.get("task_name", "").strip() or run_name
-    mode = form.get("mode", "venv").strip() or "venv"
-    if mode not in {"venv", "docker"}:
-        raise ValueError("mode must be venv or docker")
-
     return {
-        "id": task_id(),
-        "task_name": task_name,
+        "id": make_generated_name("task"),
+        "task_name": name,
+        "name": name,
         "created_at": now_iso(),
+        "updated_at": now_iso(),
         "status": "queued",
-        "mode": mode,
+        "mode": form["mode"],
         "train_kwargs": params,
-        "train_args": train_args,
+        "train_args": [f"{key}={stringify_cli_value(value)}" for key, value in params.items() if value not in ("", None)],
         "config_source": config_source,
         "notes": form.get("notes", "").strip(),
         "log_path": "",
         "worker_pid": None,
-        "swanlab": {
-            "enabled": form.get("swanlab_enabled") == "on",
-            "project": form.get("swanlab_project", "").strip(),
-            "workspace": form.get("swanlab_workspace", "").strip(),
-            "experiment_name": form.get("swanlab_experiment", "").strip() or run_name,
-            "description": form.get("swanlab_description", "").strip(),
-            "api_key": form.get("swanlab_api_key", "").strip(),
-        },
-        "dstack": {
-            "enabled": form.get("dstack_enabled") == "on",
-            "auto_submit": form.get("dstack_auto_submit") == "on",
-            "project_name": form.get("dstack_project", "").strip(),
-            "task_name": form.get("dstack_task_name", "").strip() or task_name,
-            "gpu": form.get("dstack_gpu", "").strip(),
-            "working_dir": form.get("dstack_working_dir", "").strip() or ".",
-        },
     }
 
 
-def save_task(config: AppConfig, task: dict[str, Any]) -> Path:
-    path = config.tasks_dir / f"{task['id']}.json"
-    path.write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def save_record(base: Path, payload: dict[str, Any]) -> Path:
+    path = base / f"{payload['id']}.json"
+    write_json(path, payload)
     return path
+
+
+def save_form_record(base: Path, form: dict[str, str]) -> dict[str, Any]:
+    name = form["name"].strip() or make_generated_name()
+    record = {
+        "id": make_generated_name(base.name[:-1] if base.name.endswith("s") else base.name),
+        "name": name,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "status": base.name[:-1] if base.name.endswith("s") else base.name,
+        "form": form,
+    }
+    save_record(base, record)
+    return record
 
 
 def start_task_worker(config: AppConfig, task_path: Path) -> None:
     log_path = config.tasks_dir / f"{task_path.stem}.log"
-    task = json.loads(task_path.read_text(encoding="utf-8"))
+    task = read_json(task_path)
     task["log_path"] = log_path.relative_to(config.project_root).as_posix()
-    task_path.write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json(task_path, task)
 
     log_handle = log_path.open("a", encoding="utf-8")
     process = subprocess.Popen(
@@ -276,148 +476,144 @@ def start_task_worker(config: AppConfig, task_path: Path) -> None:
     log_handle.close()
 
     task["worker_pid"] = process.pid
-    task_path.write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    task["updated_at"] = now_iso()
+    write_json(task_path, task)
 
 
-def html_page(config: AppConfig, message: str = "", error: str = "") -> str:
-    models = list_files(config.models_dir, (".pt", ".onnx", ".engine", ".pth"))
-    datasets = list_files(config.datasets_dir, (".yaml", ".yml", ".json"))
-    configs = list_files(config.configs_dir, (".yaml", ".yml", ".json", ".txt"))
-    tasks = load_tasks(config)
+def docker_accessible() -> tuple[bool, str]:
+    global DOCKER_BASE_COMMAND
+    candidates = (
+        ["docker", "ps"],
+        ["sudo", "-n", "docker", "ps"],
+    )
+    for command in candidates:
+        try:
+            result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        except FileNotFoundError:
+            continue
+        if result.returncode == 0:
+            DOCKER_BASE_COMMAND = command[:-1]
+            return True, ""
 
-    def option_list(items: list[str], placeholder: str) -> str:
-        options = [f'<option value="">{html.escape(placeholder)}</option>']
-        options.extend(f'<option value="{html.escape(item)}">{html.escape(item)}</option>' for item in items)
-        return "\n".join(options)
+    try:
+        result = subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError:
+        return False, "Docker is not installed."
+    message = result.stderr.strip() or "Docker is unavailable."
+    return False, message
 
-    rows: list[str] = []
-    for task in tasks[:30]:
-        log_link = ""
-        if task.get("log_path"):
-            log_link = f'<a href="/logs?id={html.escape(task["id"])}" target="_blank">log</a>'
-        dstack_note = ""
-        dstack_info = task.get("dstack", {})
-        if dstack_info.get("enabled"):
-            status = task.get("dstack_submit_status", "spec only")
-            dstack_note = f" / dstack: {html.escape(status)}"
-        swanlab_note = " / swanlab" if task.get("swanlab", {}).get("enabled") else ""
-        rows.append(
-            "<tr>"
-            f"<td>{html.escape(task['id'])}</td>"
-            f"<td>{html.escape(task['task_name'])}</td>"
-            f"<td>{html.escape(task['mode'])}{swanlab_note}{dstack_note}</td>"
-            f"<td>{html.escape(task.get('status', 'unknown'))}</td>"
-            f"<td>{html.escape(task.get('created_at', ''))}</td>"
-            f"<td>{log_link}</td>"
-            "</tr>"
-        )
-    if not rows:
-        rows.append('<tr><td colspan="6">No tasks yet.</td></tr>')
+def current_docker_base() -> list[str]:
+    return DOCKER_BASE_COMMAND
 
-    compatibility_lines = [
-        f"Python: {html.escape(config.compatibility['python'])}",
-        "Dstack local submit: ready" if config.compatibility["dstack"] == "ready" else "Dstack local submit: current Python unsupported, spec generation still works",
-        "SwanLab local callback: ready" if config.compatibility["swanlab"] == "ready" else "SwanLab local callback: current Python may fail in local venv, docker mode is recommended",
-    ]
 
-    notice = ""
-    if message:
-        notice = f'<p style="color:#1a7f37;"><strong>{html.escape(message)}</strong></p>'
-    if error:
-        notice += f'<p style="color:#cf222e;"><strong>{html.escape(error)}</strong></p>'
+def http_ready(url: str) -> bool:
+    try:
+        with urllib_request.urlopen(url, timeout=3) as response:
+            return response.status < 500
+    except urllib_error.HTTPError as exc:
+        return exc.code < 500
+    except (urllib_error.URLError, TimeoutError, ConnectionResetError, OSError):
+        return False
 
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>xyolo web</title>
-  <style>
-    body {{ font-family: sans-serif; margin: 24px; background: #f6f8fa; color: #24292f; }}
-    h1, h2 {{ margin-bottom: 12px; }}
-    form, .panel {{ background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; margin-bottom: 20px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }}
-    label {{ display: block; font-weight: 600; margin-bottom: 4px; }}
-    input, select, textarea {{ width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; }}
-    textarea {{ min-height: 110px; }}
-    button {{ padding: 10px 16px; border: 0; border-radius: 6px; background: #0969da; color: #fff; cursor: pointer; }}
-    table {{ width: 100%; border-collapse: collapse; background: #fff; }}
-    th, td {{ border: 1px solid #d0d7de; padding: 8px; text-align: left; vertical-align: top; }}
-    .hint {{ color: #57606a; font-size: 13px; }}
-  </style>
-</head>
-<body>
-  <h1>xyolo web</h1>
-  <div class="panel">
-    <div>{"<br>".join(html.escape(line) for line in compatibility_lines)}</div>
-    <div class="hint" style="margin-top:8px;">默认会从 models/ 和 datasets/ 读取候选项；也可以直接输入官方模型名或完整路径。</div>
-  </div>
-  {notice}
-  <form method="post" action="/tasks">
-    <h2>新建训练任务</h2>
-    <div class="grid">
-      <div><label>任务名</label><input name="task_name" placeholder="web-train-01"></div>
-      <div><label>运行名(name)</label><input name="run_name" placeholder="exp-web-01"></div>
-      <div><label>模式</label><select name="mode"><option value="venv">venv</option><option value="docker">docker</option></select></div>
-      <div><label>模型</label><select name="model_select">{option_list(models, "选择 models/ 下模型")}</select></div>
-      <div><label>自定义模型</label><input name="model_custom" placeholder="yolov8s.pt 或 ./other/model.pt"></div>
-      <div><label>数据集</label><select name="dataset_select">{option_list(datasets, "选择 datasets/ 下配置")}</select></div>
-      <div><label>自定义数据集</label><input name="dataset_custom" placeholder="my_data.yaml 或 ./other/data.yaml"></div>
-      <div><label>epochs</label><input name="epochs" value="200"></div>
-      <div><label>batch</label><input name="batch" value="8"></div>
-      <div><label>imgsz</label><input name="imgsz" value="640"></div>
-      <div><label>device</label><input name="device" placeholder="0 或 cpu"></div>
-      <div><label>workers</label><input name="workers" placeholder="8"></div>
-    </div>
-    <div class="grid" style="margin-top:12px;">
-      <div><label>optimizer</label><input name="optimizer" placeholder="auto/SGD/AdamW"></div>
-      <div><label>resume</label><input name="resume" placeholder="true 或 checkpoint.pt"></div>
-      <div><label>cache</label><input name="cache" placeholder="true/ram/disk"></div>
-      <div><label>patience</label><input name="patience" placeholder="50"></div>
-      <div><label>已保存参数文件</label><select name="config_file">{option_list(configs, "不使用参数文件")}</select></div>
-    </div>
-    <p class="hint">额外参数支持 key=value，按空格或换行分隔，例如：lr0=0.01 hsv_h=0.015</p>
-    <div><label>额外参数</label><textarea name="extra_args" placeholder="lr0=0.01&#10;close_mosaic=10"></textarea></div>
-    <div class="grid" style="margin-top:12px;">
-      <div><label>保存参数文件名</label><input name="config_name" placeholder="train-defaults.yaml"></div>
-      <div><label>参数文件格式</label><select name="config_format"><option value="yaml">yaml</option><option value="json">json</option><option value="kv">key=value</option></select></div>
-    </div>
-    <div><label>参数文件内容（可选）</label><textarea name="config_text" placeholder="epochs: 300&#10;batch: 4&#10;lr0: 0.005"></textarea></div>
-    <div class="grid" style="margin-top:12px;">
-      <div>
-        <label><input type="checkbox" name="swanlab_enabled"> 启用 SwanLab</label>
-        <div class="hint">venv 模式使用 Ultralytics 回调；docker 模式会在容器内安装 swanlab 后运行。</div>
-      </div>
-      <div><label>SwanLab project</label><input name="swanlab_project" placeholder="yolo-train"></div>
-      <div><label>SwanLab workspace</label><input name="swanlab_workspace" placeholder="team-or-user"></div>
-      <div><label>SwanLab experiment</label><input name="swanlab_experiment" placeholder="exp-001"></div>
-      <div><label>SwanLab API key</label><input name="swanlab_api_key" placeholder="可选"></div>
-      <div><label>SwanLab description</label><input name="swanlab_description" placeholder="experiment notes"></div>
-    </div>
-    <div class="grid" style="margin-top:12px;">
-      <div>
-        <label><input type="checkbox" name="dstack_enabled"> 生成 dstack 任务</label>
-        <div class="hint">会在 web/tasks/ 下生成 .dstack.yml。</div>
-      </div>
-      <div><label><input type="checkbox" name="dstack_auto_submit"> 自动提交 dstack</label></div>
-      <div><label>dstack project</label><input name="dstack_project" placeholder="my-project"></div>
-      <div><label>dstack task name</label><input name="dstack_task_name" placeholder="remote-yolo-train"></div>
-      <div><label>dstack GPU</label><input name="dstack_gpu" placeholder="24GB / A100 / H100"></div>
-      <div><label>dstack working dir</label><input name="dstack_working_dir" value="."></div>
-    </div>
-    <div style="margin-top:12px;"><label>备注</label><textarea name="notes" placeholder="这次实验的说明"></textarea></div>
-    <div style="margin-top:16px;"><button type="submit">创建并启动任务</button></div>
-  </form>
 
-  <h2>最近任务</h2>
-  <table>
-    <thead><tr><th>ID</th><th>任务</th><th>模式</th><th>状态</th><th>创建时间</th><th>日志</th></tr></thead>
-    <tbody>
-      {"".join(rows)}
-    </tbody>
-  </table>
-</body>
-</html>"""
+def container_running(tool_name: str) -> bool:
+    spec = TOOL_SPECS[tool_name]
+    inspect = subprocess.run(
+        [*current_docker_base(), "inspect", "-f", "{{.State.Running}}", spec["container_name"]],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return inspect.returncode == 0 and inspect.stdout.strip() == "true"
+
+
+def container_logs(tool_name: str) -> str:
+    spec = TOOL_SPECS[tool_name]
+    result = subprocess.run(
+        [*current_docker_base(), "logs", "--tail", "80", spec["container_name"]],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def wait_for_tool_ready(tool_name: str, timeout_seconds: int = 60) -> tuple[bool, str]:
+    spec = TOOL_SPECS[tool_name]
+    deadline = time.time() + timeout_seconds
+    last_logs = ""
+    while time.time() < deadline:
+        if http_ready(spec["url"]):
+            return True, ""
+        if not container_running(tool_name):
+            last_logs = container_logs(tool_name)
+            break
+        time.sleep(1)
+    if http_ready(spec["url"]):
+        return True, ""
+    return False, last_logs or f"{spec['display_name']} did not become ready in time."
+
+
+def ensure_tool_running(config: AppConfig, tool_name: str) -> tuple[bool, str, str]:
+    spec = TOOL_SPECS[tool_name]
+    accessible, reason = docker_accessible()
+    if not accessible:
+        return False, "", reason
+
+    if container_running(tool_name):
+        ready, details = wait_for_tool_ready(tool_name, timeout_seconds=15)
+        if ready:
+            return True, spec["url"], ""
+        return False, "", details
+
+    command = [part.replace("{RUNS_DIR}", config.runs_dir.as_posix()) for part in spec["docker_command"]]
+    if command and command[0] == "docker":
+        command = [*current_docker_base(), *command[1:]]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or spec["help_message"]
+        return False, "", message
+    ready, details = wait_for_tool_ready(tool_name)
+    if ready:
+        return True, spec["url"], ""
+    return False, "", details
+
+
+def tool_status(config: AppConfig, tool_name: str) -> dict[str, Any]:
+    accessible, reason = docker_accessible()
+    return {
+        "name": tool_name,
+        "display_name": TOOL_SPECS[tool_name]["display_name"],
+        "available": accessible,
+        "url": TOOL_SPECS[tool_name]["url"],
+        "reason": "" if accessible else reason,
+    }
+
+
+def bootstrap_payload(config: AppConfig) -> dict[str, Any]:
+    drafts = load_record_list(config.drafts_dir)
+    templates = load_record_list(config.templates_dir)
+    tasks = load_record_list(config.tasks_dir)
+    return {
+        "models": list_files(config.models_dir, (".pt", ".onnx", ".engine", ".pth")),
+        "datasets": list_files(config.datasets_dir, (".yaml", ".yml", ".json")),
+        "configs": list_files(config.configs_dir, (".yaml", ".yml")),
+        "environment": config.environment(),
+        "tools": [tool_status(config, name) for name in TOOL_SPECS],
+        "drafts": [summarize_record(item) for item in drafts],
+        "templates": [summarize_record(item) for item in templates],
+        "tasks": [
+            {
+                "id": item["id"],
+                "name": item.get("task_name", item.get("name", "")),
+                "mode": item.get("mode", ""),
+                "status": item.get("status", ""),
+                "created_at": item.get("created_at", ""),
+                "log_path": item.get("log_path", ""),
+            }
+            for item in tasks
+        ],
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -425,33 +621,86 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/bootstrap":
+            self.send_json(bootstrap_payload(self.config))
+            return
+        if parsed.path == "/api/environment":
+            self.send_json(environment_details(self.config))
+            return
+        if parsed.path.startswith("/api/records/"):
+            parts = parsed.path.split("/")
+            if len(parts) != 5:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            _, _, _, kind, record_id = parts
+            self.serve_record(kind, record_id)
+            return
         if parsed.path == "/logs":
             task_id_value = parse_qs(parsed.query).get("id", [""])[0]
             self.serve_log(task_id_value)
             return
-        message = parse_qs(parsed.query).get("message", [""])[0]
-        error = parse_qs(parsed.query).get("error", [""])[0]
-        body = html_page(self.config, message=message, error=error).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self.serve_static(parsed.path)
 
     def do_POST(self) -> None:
-        if self.path != "/tasks":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/actions":
+            payload = self.read_json_body()
+            action = str(payload.get("action", ""))
+            raw_form = payload.get("form", {})
+            if not isinstance(raw_form, dict):
+                self.send_json({"ok": False, "message": "invalid form payload"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                form = normalize_form(raw_form)
+                if action == "launch":
+                    task = create_launch_task(self.config, form)
+                    path = save_record(self.config.tasks_dir, task)
+                    start_task_worker(self.config, path)
+                    self.send_json({"ok": True, "message": "Task launched.", "item": {"id": task["id"], "name": task["task_name"]}})
+                    return
+                if action == "save_draft":
+                    record = save_form_record(self.config.drafts_dir, form)
+                    self.send_json({"ok": True, "message": "Draft saved.", "item": summarize_record(record)})
+                    return
+                if action == "save_template":
+                    record = save_form_record(self.config.templates_dir, form)
+                    self.send_json({"ok": True, "message": "Template saved.", "item": summarize_record(record)})
+                    return
+                self.send_json({"ok": False, "message": "unsupported action"}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "message": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path.startswith("/api/tools/") and parsed.path.endswith("/open"):
+            parts = parsed.path.split("/")
+            if len(parts) != 5:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            _, _, _, tool_name, _ = parts
+            if tool_name not in TOOL_SPECS:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            ok, url, reason = ensure_tool_running(self.config, tool_name)
+            if ok:
+                self.send_json({"ok": True, "url": url, "message": f"{TOOL_SPECS[tool_name]['display_name']} is ready."})
+            else:
+                self.send_json({"ok": False, "message": reason}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def serve_record(self, kind: str, record_id: str) -> None:
+        mapping = {
+            "drafts": self.config.drafts_dir,
+            "templates": self.config.templates_dir,
+        }
+        if kind not in mapping:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8")
-        form = {key: values[-1] for key, values in parse_qs(payload, keep_blank_values=True).items()}
-        try:
-            task = build_task(form, self.config)
-            path = save_task(self.config, task)
-            start_task_worker(self.config, path)
-            self.redirect("/?message=task%20created")
-        except Exception as exc:  # noqa: BLE001
-            self.redirect(f"/?error={quote(str(exc))}")
+        path = mapping[kind] / f"{record_id}.json"
+        if not path.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        record = read_json(path)
+        self.send_json({"ok": True, "item": record})
 
     def serve_log(self, task_id_value: str) -> None:
         path = self.config.tasks_dir / f"{task_id_value}.log"
@@ -465,10 +714,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def redirect(self, target: str) -> None:
-        self.send_response(HTTPStatus.SEE_OTHER)
-        self.send_header("Location", target)
+    def serve_static(self, request_path: str) -> None:
+        dist = self.config.ui_dist_dir
+        target = (dist / request_path.lstrip("/")).resolve()
+        if target.is_file() and dist.resolve() in target.parents:
+            self.send_file(target)
+            return
+        self.send_file(dist / "index.html")
+
+    def send_file(self, path: Path) -> None:
+        body = path.read_bytes()
+        mime_type, _ = mimetypes.guess_type(path.name)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", f"{mime_type or 'application/octet-stream'}")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        self.wfile.write(body)
+
+    def send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_json_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length).decode("utf-8")
+        return json.loads(raw or "{}")
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
@@ -485,7 +759,7 @@ def main() -> None:
     config = AppConfig(Path(args.project_root).resolve(), Path(args.venv_dir).resolve())
     Handler.config = config
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"xyolo web listening on http://{args.host}:{args.port}")
+    print(f"XYolo web listening on http://{args.host}:{args.port}")
     server.serve_forever()
 
 

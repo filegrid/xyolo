@@ -1,4 +1,4 @@
-# xyolo
+# XYolo
 
 `xyolo` is a YOLO training launcher with support for:
 
@@ -19,7 +19,7 @@ The script automatically manages these directories:
 - `datasets/`: dataset configs
 - `runs/`: training outputs
 - `web/configs/`: parameter files saved by the web UI
-- `web/tasks/`: generated tasks, logs, and dstack specs
+- `web/tasks/`: generated tasks and logs
 
 All of them are created automatically, so you do **not** need to create them by hand.
 
@@ -174,32 +174,64 @@ Custom bind address:
 ./xyolo web --host 0.0.0.0 --port 8860
 ```
 
-The web UI can:
+The web frontend uses:
 
-1. Select models and datasets from `models/` and `datasets/`
-2. Edit training parameters directly
-3. Load an existing parameter file or save a new one from the page
-4. Create tasks and start them automatically in the background
-5. View task status and logs
+- **Vite**
+- **React**
+- **pnpm**
+- **shadcn/ui**
+
+`xyolo web` installs the frontend dependencies if needed and rebuilds the frontend before starting the backend service.
+
+The web UI is a **single training page**.
+
+Top-right controls:
+
+- **Environment** entry
+- **dstack** entry
+- **SwanLab** entry
+- **language** switch between Chinese and English
+- **theme** switch with `system`, `light`, and `dark`
+
+Language and theme selections are stored in cookies.
+
+The theme switch really follows the system preference when `system` is selected.
+
+Inside the training page, the UI is split into:
+
+1. **New**
+2. **List**
+
+The **New** section contains:
+
+- **Basic settings**
+- **Advanced settings** (collapsed by default)
+
+The **List** section shows:
+
+- launched tasks
+- saved templates
+- saved drafts
+
+The model and dataset fields each use a **single input** with local suggestions from `models/` and `datasets/`, while still allowing official model names or custom paths.
+
+Only **one task name** is used. It is generated automatically for each action and reused for the launched training run and related metadata.
 
 Generated task artifacts:
 
 - `web/tasks/<task-id>.json`: task definition
 - `web/tasks/<task-id>.log`: training log
-- `web/tasks/<task-id>.dstack.yml`: created when dstack is enabled
+- `web/drafts/<draft-id>.json`: saved draft
+- `web/templates/<template-id>.json`: saved template
 
 ### Web parameter files
 
 The page supports:
 
 1. **Direct parameter editing**
-2. **Parameter files**
+2. **Optional YAML parameter files**
 
-Supported formats:
-
-- `yaml`
-- `json`
-- `key=value` text
+Only **YAML** is supported for saved parameter files.
 
 YAML example:
 
@@ -210,88 +242,29 @@ lr0: 0.005
 close_mosaic: 10
 ```
 
-`key=value` example:
-
-```text
-epochs=300
-batch=4
-lr0=0.005
-close_mosaic=10
-```
-
 ## SwanLab usage
 
-The web UI can enable **SwanLab** directly.
+The page keeps a **SwanLab entry** in the top-right area.
 
-Available fields:
-
-- `SwanLab project`
-- `SwanLab workspace`
-- `SwanLab experiment`
-- `SwanLab API key`
-- `SwanLab description`
-
-### SwanLab in venv mode
-
-Web tasks switch to an `Ultralytics + SwanLab callback` flow:
-
-```python
-from ultralytics import YOLO
-from swanlab.integration.ultralytics import add_swanlab_callback
-```
-
-Training metrics are then logged to SwanLab automatically.
-
-### SwanLab in docker mode
-
-For Docker tasks, the worker installs `swanlab` inside the container and then runs the integration script, so SwanLab can also be enabled directly from the UI for Docker-based jobs.
+Clicking it asks the backend to try launching SwanLab through Docker and then opens the service URL if successful.
 
 ### SwanLab compatibility
 
-The current local environment uses **Python 3.14**.
+The current local Python environment uses **Python 3.14**, so the local Python package path is not used for the entry anymore.
 
-The web page already shows the compatibility status:
-
-- **docker mode is recommended**
-- **local SwanLab callbacks in venv mode may fail because of the Python version**
-
-If you need reliable local SwanLab support, use **Python 3.10 - 3.13**.
+The current implementation uses the Docker path instead. If direct Docker access fails, the backend also retries with `sudo -n docker`. If startup still fails, the UI surfaces that error directly.
 
 ## dstack usage
 
-The web UI supports:
+The page keeps a **dstack entry** in the top-right area.
 
-1. **Generating a dstack task file**
-2. **Attempting automatic dstack submission**
-
-When enabled, it creates:
-
-```bash
-web/tasks/<task-id>.dstack.yml
-```
-
-The generated spec includes:
-
-- task name
-- working directory
-- GPU resource request
-- the `./xyolo ...` launch command
-- SwanLab API key if provided
-
-If **auto submit dstack** is enabled, the worker runs:
-
-```bash
-python -m dstack apply -f web/tasks/<task-id>.dstack.yml -d -y
-```
+Clicking it asks the backend to try launching dstack through Docker and then opens the service URL if successful.
 
 ### dstack compatibility
 
-The currently installed `dstack` package does **not** support Python 3.14. At the moment:
+The installed Python package still does **not** support Python 3.14, so the entry uses the Docker path instead of the local Python package.
 
-- generating `.dstack.yml` works
-- local automatic submission may fail
-
-If you need reliable automatic dstack submission, use a **Python 3.10 - 3.13** virtual environment.
+If direct Docker access fails, the backend also retries with `sudo -n docker`. If startup still fails, the UI shows the exact failure reason.
 
 ## Options
 

@@ -11,6 +11,7 @@ MODELS_DIR="${PROJECT_ROOT}/models"
 DATASETS_DIR="${PROJECT_ROOT}/datasets"
 RUNS_DIR="${PROJECT_ROOT}/runs"
 WEB_DIR="${PROJECT_ROOT}/web"
+WEB_UI_DIR="${WEB_DIR}/ui"
 DOCKER_IMAGE="ultralytics/ultralytics:latest"
 DETACH_DOCKER="true"
 CONTAINER_NAME=""
@@ -18,6 +19,7 @@ DRY_RUN="false"
 WEB_HOST="127.0.0.1"
 WEB_PORT="8860"
 VENV_PACKAGES=(ultralytics dstack swanlab)
+PNPM_BIN="${HOME}/.local/bin/pnpm"
 
 print_help() {
   cat <<'EOF'
@@ -114,6 +116,35 @@ ensure_docker_image_ready() {
   fi
 }
 
+ensure_pnpm_ready() {
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if [[ -x "${PNPM_BIN}" ]]; then
+    return
+  fi
+  command -v npm >/dev/null 2>&1 || {
+    echo "npm is not installed or not in PATH." >&2
+    exit 1
+  }
+  echo "Installing pnpm under ${HOME}/.local"
+  npm install -g pnpm --prefix "${HOME}/.local"
+}
+
+ensure_frontend_ready() {
+  ensure_pnpm_ready
+  [[ -d "${WEB_UI_DIR}" ]] || {
+    echo "Frontend directory not found: ${WEB_UI_DIR}" >&2
+    exit 1
+  }
+
+  if [[ ! -d "${WEB_UI_DIR}/node_modules" ]]; then
+    echo "Installing frontend dependencies"
+    "${PNPM_BIN}" --dir "${WEB_UI_DIR}" install
+  fi
+
+  echo "Building frontend"
+  "${PNPM_BIN}" --dir "${WEB_UI_DIR}" build
+}
+
 normalize_yolo_arg() {
   local arg="$1"
   local key="${arg%%=*}"
@@ -136,8 +167,9 @@ normalize_yolo_arg() {
 }
 
 start_web() {
-  mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks"
+  mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks" "${WEB_DIR}/drafts" "${WEB_DIR}/templates"
   ensure_venv_ready
+  ensure_frontend_ready
 
   CMD=(
     "${VENV_DIR}/bin/python"
@@ -260,7 +292,7 @@ if ((${#YOLO_ARGS[@]} == 0)); then
 fi
 
 cd "${PROJECT_ROOT}"
-mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks"
+mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks" "${WEB_DIR}/drafts" "${WEB_DIR}/templates"
 
 NORMALIZED_YOLO_ARGS=()
 HAS_PROJECT_ARG="false"
