@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+
+# Local training assets
+datasets/
+models/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Generated outputs
+runs/
+web/configs/
+web/tasks/
+*.log
+
+# Editor and OS files
+.DS_Store
+*.swp
+*.swo

@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+
+MODE="venv"
+VENV_DIR="${PROJECT_ROOT}/venv"
+MODELS_DIR="${PROJECT_ROOT}/models"
+DATASETS_DIR="${PROJECT_ROOT}/datasets"
+RUNS_DIR="${PROJECT_ROOT}/runs"
+WEB_DIR="${PROJECT_ROOT}/web"
+DOCKER_IMAGE="ultralytics/ultralytics:latest"
+DETACH_DOCKER="true"
+CONTAINER_NAME=""
+DRY_RUN="false"
+WEB_HOST="127.0.0.1"
+WEB_PORT="8860"
+VENV_PACKAGES=(ultralytics dstack swanlab)
+
+print_help() {
+  cat <<'EOF'
+Usage:
+  ./xyolo [--mode venv|docker] [options] [train] key=value [key=value ...]
+  ./xyolo web [--host HOST] [--port PORT] [--venv-dir PATH]
+
+Train options:
+  --mode MODE             Launch mode: venv or docker. Default: venv
+  --venv-dir PATH         Virtual environment directory. Default: ./venv
+  --models-dir PATH       Model directory for local checkpoints. Default: ./models
+  --datasets-dir PATH     Dataset directory for local yaml files. Default: ./datasets
+  --docker-image IMAGE    Docker image. Default: ultralytics/ultralytics:latest
+  --container-name NAME   Optional docker container name
+  --attach                Run docker in foreground
+  --detach                Run docker in background (default for docker mode)
+  --dry-run               Print the final command without executing it
+  -h, --help              Show this help message
+
+Web options:
+  --host HOST             Web service bind host. Default: 127.0.0.1
+  --port PORT             Web service bind port. Default: 8860
+
+Examples:
+  ./xyolo model=yolov8s.pt data=xxx.yaml epochs=200 batch=8
+  ./xyolo model=best.pt data=my_dataset.yaml epochs=100 batch=8
+  ./xyolo --mode docker model=best.pt data=my_dataset.yaml epochs=200 batch=8
+  ./xyolo web --host 0.0.0.0 --port 8860
+EOF
+}
+
+run_privileged() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+
+  command -v sudo >/dev/null 2>&1 || {
+    echo "Need root or sudo privileges to install system packages." >&2
+    exit 1
+  }
+
+  sudo "$@"
+}
+
+ensure_venv_ready() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "python3 is not installed or not in PATH." >&2
+    exit 1
+  }
+
+  if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    echo "Creating virtual environment: ${VENV_DIR}"
+    python3 -m venv "${VENV_DIR}"
+  fi
+
+  if [[ ! -x "${VENV_DIR}/bin/yolo" ]]; then
+    echo "Installing training packages into ${VENV_DIR}"
+    "${VENV_DIR}/bin/python" -m pip install --upgrade pip
+    "${VENV_DIR}/bin/python" -m pip install "${VENV_PACKAGES[@]}"
+  fi
+
+  for package in "${VENV_PACKAGES[@]}"; do
+    "${VENV_DIR}/bin/python" -m pip show "${package}" >/dev/null 2>&1 || {
+      echo "Installing missing package in ${VENV_DIR}: ${package}"
+      "${VENV_DIR}/bin/python" -m pip install "${package}"
+    }
+  done
+}
+
+ensure_docker_ready() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker not found, installing docker.io"
+    command -v apt-get >/dev/null 2>&1 || {
+      echo "Automatic Docker installation currently supports apt-based Linux only." >&2
+      exit 1
+    }
+    run_privileged apt-get update
+    run_privileged apt-get install -y docker.io
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet docker; then
+      echo "Starting Docker service"
+      run_privileged systemctl enable --now docker
+    fi
+  fi
+}
+
+ensure_docker_image_ready() {
+  if ! docker image inspect "${DOCKER_IMAGE}" >/dev/null 2>&1; then
+    echo "Docker image not found locally, pulling: ${DOCKER_IMAGE}"
+    docker pull "${DOCKER_IMAGE}"
+  fi
+}
+
+normalize_yolo_arg() {
+  local arg="$1"
+  local key="${arg%%=*}"
+  local value="${arg#*=}"
+
+  case "${key}" in
+    model)
+      if [[ "${value}" != */* && "${value}" != .* && -e "${MODELS_DIR}/${value}" ]]; then
+        value="${MODELS_DIR#"${PROJECT_ROOT}/"}/${value}"
+      fi
+      ;;
+    data)
+      if [[ "${value}" != */* && "${value}" != .* && -e "${DATASETS_DIR}/${value}" ]]; then
+        value="${DATASETS_DIR#"${PROJECT_ROOT}/"}/${value}"
+      fi
+      ;;
+  esac
+
+  printf '%s=%s\n' "${key}" "${value}"
+}
+
+start_web() {
+  mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks"
+  ensure_venv_ready
+
+  CMD=(
+    "${VENV_DIR}/bin/python"
+    "${WEB_DIR}/server.py"
+    "--host" "${WEB_HOST}"
+    "--port" "${WEB_PORT}"
+    "--project-root" "${PROJECT_ROOT}"
+    "--venv-dir" "${VENV_DIR}"
+  )
+
+  printf 'Running:'
+  printf ' %q' "${CMD[@]}"
+  printf '\n'
+
+  exec "${CMD[@]}"
+}
+
+if (($# > 0)) && [[ "$1" == "web" ]]; then
+  shift
+  while (($# > 0)); do
+    case "$1" in
+      --host)
+        [[ $# -ge 2 ]] || { echo "Missing value for --host" >&2; exit 1; }
+        WEB_HOST="$2"
+        shift 2
+        ;;
+      --port)
+        [[ $# -ge 2 ]] || { echo "Missing value for --port" >&2; exit 1; }
+        WEB_PORT="$2"
+        shift 2
+        ;;
+      --venv-dir)
+        [[ $# -ge 2 ]] || { echo "Missing value for --venv-dir" >&2; exit 1; }
+        VENV_DIR="$2"
+        shift 2
+        ;;
+      -h|--help)
+        print_help
+        exit 0
+        ;;
+      *)
+        echo "Unsupported web argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  start_web
+fi
+
+YOLO_ARGS=()
+
+while (($# > 0)); do
+  case "$1" in
+    --mode)
+      [[ $# -ge 2 ]] || { echo "Missing value for --mode" >&2; exit 1; }
+      MODE="$2"
+      shift 2
+      ;;
+    --venv-dir)
+      [[ $# -ge 2 ]] || { echo "Missing value for --venv-dir" >&2; exit 1; }
+      VENV_DIR="$2"
+      shift 2
+      ;;
+    --models-dir)
+      [[ $# -ge 2 ]] || { echo "Missing value for --models-dir" >&2; exit 1; }
+      MODELS_DIR="$2"
+      shift 2
+      ;;
+    --datasets-dir)
+      [[ $# -ge 2 ]] || { echo "Missing value for --datasets-dir" >&2; exit 1; }
+      DATASETS_DIR="$2"
+      shift 2
+      ;;
+    --docker-image)
+      [[ $# -ge 2 ]] || { echo "Missing value for --docker-image" >&2; exit 1; }
+      DOCKER_IMAGE="$2"
+      shift 2
+      ;;
+    --container-name)
+      [[ $# -ge 2 ]] || { echo "Missing value for --container-name" >&2; exit 1; }
+      CONTAINER_NAME="$2"
+      shift 2
+      ;;
+    --attach)
+      DETACH_DOCKER="false"
+      shift
+      ;;
+    --detach)
+      DETACH_DOCKER="true"
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN="true"
+      shift
+      ;;
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    train)
+      shift
+      ;;
+    *=*)
+      YOLO_ARGS+=("$1")
+      shift
+      ;;
+    *)
+      echo "Unsupported argument: $1" >&2
+      echo "Only yolo-style key=value arguments are supported." >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ((${#YOLO_ARGS[@]} == 0)); then
+  echo "No training arguments provided." >&2
+  print_help
+  exit 1
+fi
+
+cd "${PROJECT_ROOT}"
+mkdir -p "${MODELS_DIR}" "${DATASETS_DIR}" "${RUNS_DIR}" "${WEB_DIR}/configs" "${WEB_DIR}/tasks"
+
+NORMALIZED_YOLO_ARGS=()
+HAS_PROJECT_ARG="false"
+
+for arg in "${YOLO_ARGS[@]}"; do
+  key="${arg%%=*}"
+  if [[ "${key}" == "project" ]]; then
+    HAS_PROJECT_ARG="true"
+  fi
+  NORMALIZED_YOLO_ARGS+=("$(normalize_yolo_arg "${arg}")")
+done
+
+if [[ "${HAS_PROJECT_ARG}" == "false" ]]; then
+  NORMALIZED_YOLO_ARGS+=("project=runs")
+fi
+
+case "${MODE}" in
+  venv)
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      ensure_venv_ready
+    fi
+    YOLO_BIN="${VENV_DIR}/bin/yolo"
+    [[ -x "${YOLO_BIN}" ]] || { echo "yolo executable not found: ${YOLO_BIN}" >&2; exit 1; }
+
+    CMD=("${YOLO_BIN}" "train" "${NORMALIZED_YOLO_ARGS[@]}")
+    ;;
+  docker)
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      ensure_docker_ready
+      ensure_docker_image_ready
+    fi
+    command -v docker >/dev/null 2>&1 || { echo "docker is not installed or not in PATH." >&2; exit 1; }
+
+    CMD=("docker" "run" "--rm" "--runtime=nvidia")
+    if [[ "${DETACH_DOCKER}" == "true" ]]; then
+      CMD+=("-d")
+    fi
+    CMD+=(
+      "--shm-size=4g"
+      "--ulimit" "memlock=-1"
+      "--ulimit" "stack=67108864"
+      "-v" "${PROJECT_ROOT}:/ultralytics"
+      "-w" "/ultralytics"
+    )
+    if [[ -n "${CONTAINER_NAME}" ]]; then
+      CMD+=("--name" "${CONTAINER_NAME}")
+    fi
+    DOCKER_YOLO_CMD="yolo train"
+    for arg in "${NORMALIZED_YOLO_ARGS[@]}"; do
+      printf -v ESCAPED_ARG ' %q' "${arg}"
+      DOCKER_YOLO_CMD+="${ESCAPED_ARG}"
+    done
+    CMD+=(
+      "${DOCKER_IMAGE}"
+      "bash" "-lc" "${DOCKER_YOLO_CMD}"
+    )
+    ;;
+  *)
+    echo "Unsupported mode: ${MODE}. Use venv or docker." >&2
+    exit 1
+    ;;
+esac
+
+printf 'Running:'
+printf ' %q' "${CMD[@]}"
+printf '\n'
+
+if [[ "${DRY_RUN}" == "true" ]]; then
+  exit 0
+fi
+
+exec "${CMD[@]}"
