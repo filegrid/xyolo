@@ -1,6 +1,9 @@
 # Python
 __pycache__/
 *.py[cod]
+build/
+dist/
+*.egg-info/
 
 # Virtual environment
 venv/
@@ -19,7 +22,6 @@ web/configs/
 web/drafts/
 web/templates/
 web/tasks/
-web/ui/dist/
 web/ui/node_modules/
 *.log
 

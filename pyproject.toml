@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xyolo"
+version = "0.1.0"
+description = "YOLO training launcher with local, Docker, and web workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+  "ultralytics>=8.0",
+]
+
+[project.scripts]
+xyolo = "xyolo.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+xyolo = ["static/*", "static/**/*"]

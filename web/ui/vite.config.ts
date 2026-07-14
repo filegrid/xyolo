@@ -5,6 +5,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    outDir: '../../src/xyolo/static',
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
