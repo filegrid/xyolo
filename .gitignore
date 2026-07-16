@@ -1,6 +1,41 @@
 # Python
 __pycache__/
 *.py[cod]
+build/
+dist/
+*.egg-info/
+
+# Frontend dependencies and caches
+node_modules/
+**/node_modules/
+dist-ssr/
+**/dist-ssr/
+.vite/
+**/.vite/
+.cache/
+**/.cache/
+.parcel-cache/
+**/.parcel-cache/
+.next/
+**/.next/
+.nuxt/
+**/.nuxt/
+.svelte-kit/
+**/.svelte-kit/
+.angular/
+**/.angular/
+.turbo/
+**/.turbo/
+coverage/
+**/coverage/
+.npm/
+**/.npm/
+.pnpm-store/
+**/.pnpm-store/
+.yarn/
+**/.yarn/
+.eslintcache
+*.tsbuildinfo
 
 # Virtual environment
 venv/
@@ -19,8 +54,6 @@ web/configs/
 web/drafts/
 web/templates/
 web/tasks/
-web/ui/dist/
-web/ui/node_modules/
 *.log
 
 # Editor and OS files

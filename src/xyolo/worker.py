@@ -29,8 +29,8 @@ def log(message: str) -> None:
     print(f"[{now_iso()}] {message}", flush=True)
 
 
-def build_xyolo_command(task: dict[str, Any], xyolo_path: Path) -> list[str]:
-    command = [str(xyolo_path), "--mode", task["mode"]]
+def build_xyolo_command(task: dict[str, Any]) -> list[str]:
+    command = [sys.executable, "-m", "xyolo", "train", "--mode", task["mode"]]
     if task["mode"] == "docker":
         command.append("--attach")
     command.extend(task["train_args"])
@@ -47,12 +47,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", required=True)
     parser.add_argument("--project-root", required=True)
-    parser.add_argument("--venv-dir", required=True)
     args = parser.parse_args()
 
     task_path = Path(args.task).resolve()
     project_root = Path(args.project_root).resolve()
-    xyolo_path = project_root / "xyolo"
 
     task = load_task(task_path)
     task["status"] = "running"
@@ -60,7 +58,7 @@ def main() -> None:
     save_task(task_path, task)
 
     try:
-        command = build_xyolo_command(task, xyolo_path)
+        command = build_xyolo_command(task)
         return_code = run_command(command, project_root, os.environ.copy())
         task["status"] = "completed" if return_code == 0 else "failed"
         task["return_code"] = return_code

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.resources
 import json
 import mimetypes
 import shlex
@@ -105,9 +106,8 @@ PRIMARY_PACKAGE_NAMES = (
 
 
 class AppConfig:
-    def __init__(self, project_root: Path, venv_dir: Path) -> None:
+    def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
-        self.venv_dir = venv_dir
         self.models_dir = project_root / "models"
         self.datasets_dir = project_root / "datasets"
         self.runs_dir = project_root / "runs"
@@ -116,8 +116,7 @@ class AppConfig:
         self.configs_dir = self.web_dir / "configs"
         self.drafts_dir = self.web_dir / "drafts"
         self.templates_dir = self.web_dir / "templates"
-        self.ui_dist_dir = self.web_dir / "ui" / "dist"
-        self.worker_script = self.web_dir / "task_worker.py"
+        self.ui_dist_dir = Path(str(importlib.resources.files("xyolo").joinpath("static")))
         self.python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
         for path in (
@@ -154,21 +153,13 @@ def project_tree(config: AppConfig) -> str:
         ("datasets/  # dataset YAML files and related assets", []),
         ("models/  # model weights and checkpoints", []),
         ("runs/  # training outputs", []),
-        ("venv/  # local Python environment", []),
         (
-            "web/  # web backend and frontend",
+            "web/  # generated web data",
             [
                 ("configs/  # saved YAML parameter files", []),
                 ("drafts/  # saved drafts", []),
                 ("tasks/  # task metadata and logs", []),
                 ("templates/  # reusable templates", []),
-                (
-                    "ui/  # Vite React frontend",
-                    [
-                        ("src/  # frontend source files", []),
-                        ("dist/  # built static assets", []),
-                    ],
-                ),
             ],
         ),
     ]
@@ -186,11 +177,9 @@ def project_tree(config: AppConfig) -> str:
 
 
 def installed_packages(config: AppConfig) -> list[dict[str, str]]:
-    python_executable = config.venv_dir / "bin" / "python"
-    executable = python_executable if python_executable.exists() else Path(sys.executable)
     try:
         result = subprocess.run(
-            [str(executable), "-m", "pip", "list", "--format=json"],
+            [sys.executable, "-m", "pip", "list", "--format=json"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -467,7 +456,7 @@ def start_task_worker(config: AppConfig, task_path: Path) -> None:
 
     log_handle = log_path.open("a", encoding="utf-8")
     process = subprocess.Popen(
-        [sys.executable, str(config.worker_script), "--task", str(task_path), "--project-root", str(config.project_root), "--venv-dir", str(config.venv_dir)],
+        [sys.executable, "-m", "xyolo.worker", "--task", str(task_path), "--project-root", str(config.project_root)],
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         cwd=config.project_root,
@@ -748,19 +737,22 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+def serve(host: str, port: int, project_root: Path) -> None:
+    config = AppConfig(project_root.resolve())
+    Handler.config = config
+    server = ThreadingHTTPServer((host, port), Handler)
+    print(f"XYolo web listening on http://{host}:{port}")
+    server.serve_forever()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8860)
-    parser.add_argument("--project-root", required=True)
-    parser.add_argument("--venv-dir", required=True)
+    parser.add_argument("--project-root", default=".")
     args = parser.parse_args()
 
-    config = AppConfig(Path(args.project_root).resolve(), Path(args.venv_dir).resolve())
-    Handler.config = config
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"XYolo web listening on http://{args.host}:{args.port}")
-    server.serve_forever()
+    serve(args.host, args.port, Path(args.project_root))
 
 
 if __name__ == "__main__":
