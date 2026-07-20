@@ -4,16 +4,16 @@
 
 训练页不再以“新建一次训练任务”为中心，而只保留“新建训练目标”这一种入口。
 
-每个训练目标是一棵瀑布流演进树：
+每个训练目标不是只能有一个起点，而是可以维护多个 root，整体表现为一片瀑布流演进森林：
 
-1. 根节点表示目标的初始训练基线。
+1. 每个 root 表示该目标的一条初始训练基线。
 2. 后续每个分支节点都来自某个已有节点。
 3. 分支必须说明“为什么要分支”。
 4. 子节点的数据集只能在父节点数据集基础上做加法，不能减法替换。
 5. 每次实际训练都继承目标默认参数，只允许局部覆盖。
 6. 每次训练可以挂多个验证集，分别评估效果。
 
-训练执行方式仍然沿用现有方法：最终还是生成当前 `train_kwargs`，调用现有训练流程，不另起一套训练引擎。
+训练执行方式仍然沿用现有方法：最终还是生成统一的 `train_request`，再由具体 `toolchain` 转成对应执行负载，不另起一套训练引擎。
 
 ## 2. 页面模型从“任务”改成“目标”
 
@@ -85,34 +85,38 @@
 
 这些默认值定义的是“这个目标通常怎么训练”，不是立刻执行一次训练。
 
-### 4.3 根节点
+### 4.3 Root 层
 
-每个目标必须有一个根节点，表示起点。
+每个目标必须至少有一个 root，但可以同时存在多个 root。
 
-根节点可以来自：
+这样可以支持一个训练目标从多个源头数据集或多个初始模型并行起步，而不是被限制成单一起点。
+
+每个 root 都表示一条可继续分支演进的初始基线。root 可以来自：
 
 1. 官方预训练权重；
 2. 自定义模型结构 YAML + 初始化权重；
 3. 已有历史模型导入。
 
+每个 root 节点本身也允许直接配置多个初始数据集，作为该条分支的源头训练集合。
+
 ### 4.4 节点树
 
-后续所有训练节点都必须挂在某个父节点下面，不允许孤立创建。
+后续所有训练节点都必须挂在某个 root 或某个已有父节点下面，不允许孤立创建。
 
 ## 5. 瀑布流设计
 
 ### 5.1 展示形式
 
-目标内部采用纵向瀑布流，而不是平铺表格。
+目标内部采用“多 root + 每个 root 向下瀑布流演进”的展示形式，而不是平铺表格。
 
 示意：
 
 ```text
 目标：person-helmet
 
-[N0] 初始基线
+[R0/N0] 初始基线-A
   模型：yolov8s.pt
-  数据：dataset-v1
+  初始数据：dataset-base-v1 + dataset-site-a-v1
   指标：mAP50-95=0.61
   │
   ├── [N1] 增加夜间数据
@@ -132,6 +136,17 @@
         数据增量：backlight-v1
         参数调整：仅调整 augment
         指标：old-val / backlight-val / merged-val
+
+[R1/N0] 初始基线-B
+  模型：history/best-site-b.pt
+  初始数据：dataset-base-v1 + dataset-site-b-v1
+  指标：mAP50-95=0.59
+  │
+  └── [N4] 增加雨天数据
+        分支原因：雨天场景 recall 偏低
+        数据增量：rain-v1
+        参数调整：epochs 100
+        指标：old-val / rain-val / merged-val
 ```
 
 ### 5.2 每个分支必须记录原因
@@ -170,7 +185,13 @@
 - 只保留新增数据单独训练；
 - 在子节点偷偷改掉父节点的数据定义。
 
-这样每个节点都天然满足“对子节点的数据集做加法”。
+如果当前节点是 root，那么它没有父节点，此时：
+
+`effective_datasets = root_datasets`
+
+其中 `root_datasets` 本身允许包含多个源头数据集。
+
+这样每个节点都天然满足“对子节点的数据集做加法”，同时不会把源头数据集限制成只能有一个。
 
 ## 6. 节点的数据模型
 
@@ -209,6 +230,12 @@
 1. `added_datasets`：本节点新增的数据；
 2. `effective_datasets`：从根到当前节点累计后的训练数据；
 3. `override_params`：只写本节点相对默认值或父节点的差异。
+
+对于 root 节点，建议再补充三个字段：
+
+1. `is_root`：标记该节点是 root；
+2. `root_key`：标识该目标下的第几个 root；
+3. `root_datasets`：该 root 自身的初始数据集集合。
 
 ## 7. 参数继承模型
 
@@ -268,22 +295,36 @@ epochs: 60
 
 虽然页面模型改了，但训练执行不要重写。
 
-后端仍应产出当前已有的结构，例如：
+后端仍应产出统一执行结构，例如：
 
 ```json
 {
-  "train_kwargs": {
-    "model": "models/previous-best.pt",
-    "data": "web/tasks/task-001/data.effective.yaml",
-    "epochs": 60,
-    "lr0": 0.0005,
-    "imgsz": 640,
-    "batch": 32
+  "toolchain": "yolo",
+  "operation": "train",
+  "train_request": {
+    "task": "detect",
+    "base_model": {
+      "path": "models/previous-best.pt"
+    },
+    "dataset": {
+      "path": "web/tasks/task-001/data.effective.yaml",
+      "format": "yolo-yaml"
+    },
+    "train_config": {
+      "epochs": 60,
+      "imgsz": 640,
+      "batch": 32
+    },
+    "provider_payload": {
+      "kwargs": {
+        "lr0": 0.0005
+      }
+    }
   }
 }
 ```
 
-也就是说，新的“目标树”只是更高层的组织方式，底层仍调用现有 `YOLO(...).train(...)` 或当前 worker 流程。
+也就是说，新的“目标树”只是更高层的组织方式，底层仍通过 `toolchain adapter` 复用现有执行流程。当前先实现 `yolo`，后续可接 `torch` 或其他工具链。
 
 ## 8. 数据集加法规则
 
@@ -293,10 +334,11 @@ epochs: 60
 
 正确流程是：
 
-1. 继承父节点的 `effective_datasets`；
-2. 选择当前新增数据集；
-3. 后端生成当前节点的合并训练 YAML；
-4. 实际训练使用这个合并 YAML。
+1. 如果是普通分支节点，则继承父节点的 `effective_datasets`；
+2. 如果是普通分支节点，则再选择当前 `added_datasets`；
+3. 如果是 root 节点，则直接配置 `root_datasets` 作为初始集合；
+4. 后端生成当前节点的合并训练 YAML；
+5. 实际训练使用这个合并 YAML。
 
 例如：
 
@@ -412,11 +454,12 @@ names:
 
 - 目标名称
 - 任务类型
-- 根节点模型来源
+- root 模型来源
+- root 初始数据集
 - 目标默认参数
 - 目标默认验证集
 
-保存后自动生成根节点配置页。
+保存后进入 root 管理流程，允许用户先创建一个或多个 root 节点配置页。
 
 ### 10.2 在节点上创建分支
 
@@ -431,7 +474,7 @@ names:
 系统自动继承：
 
 - 父节点模型权重
-- 父节点已有数据集
+- 父节点已有数据集；如果父节点是 root，则这里包含该 root 的全部源头数据集
 - 父节点已生效参数
 - 目标默认验证集
 
@@ -458,7 +501,8 @@ names:
 | 目标名称 | 例如 person-helmet |
 | 任务类型 | detect / pose |
 | 当前最佳节点 | 当前推荐模型分支 |
-| 根节点时间 | 初始时间 |
+| Root 数 | 当前目标下的 root 数量 |
+| 最早 root 时间 | 初始时间 |
 | 最近训练 | 最近一次节点训练时间 |
 | 节点数 | 当前树的节点总数 |
 | 状态 | 正常 / 有告警 / 有失败节点 |
@@ -501,6 +545,7 @@ names:
   "name": "person-helmet",
   "task": "detect",
   "description": "人员与安全帽检测目标",
+  "toolchain": "yolo",
   "default_params": {
     "imgsz": 640,
     "batch": 32,
@@ -512,7 +557,7 @@ names:
     "datasets/base-val.yaml",
     "datasets/regression-val.yaml"
   ],
-  "root_node_id": "node-000",
+  "root_node_ids": ["node-000", "node-100"],
   "best_node_id": "node-002"
 }
 ```
@@ -555,31 +600,85 @@ names:
 }
 ```
 
+一个 root 节点可以是：
+
+```json
+{
+  "id": "node-000",
+  "goal_id": "goal-person-helmet",
+  "parent_id": null,
+  "is_root": true,
+  "root_key": "root-a",
+  "name": "初始基线-A",
+  "toolchain": "yolo",
+  "base_model": "yolov8s.pt",
+  "root_datasets": [
+    "datasets/base-v1.yaml",
+    "datasets/site-a-v1.yaml"
+  ],
+  "effective_datasets": [
+    "datasets/base-v1.yaml",
+    "datasets/site-a-v1.yaml"
+  ],
+  "override_params": {},
+  "validations": [
+    "datasets/base-val.yaml",
+    "datasets/regression-val.yaml"
+  ]
+}
+```
+
 ### 12.3 训练执行任务
 
-现有任务结构继续保留，但增加来源字段：
+现有任务结构继续保留，但改成“公共请求 + toolchain 私有负载”的形式：
 
 ```json
 {
   "id": "task-20260715-001",
   "goal_id": "goal-person-helmet",
   "node_id": "node-002",
-  "train_kwargs": {
-    "model": "runs/person-helmet/node-001/weights/best.pt",
-    "data": "web/tasks/task-20260715-001/data.effective.yaml",
-    "epochs": 60,
-    "lr0": 0.0005,
-    "imgsz": 640,
-    "batch": 32
+  "toolchain": "yolo",
+  "operation": "train",
+  "request": {
+    "task": "detect",
+    "base_model": {
+      "path": "runs/person-helmet/node-001/weights/best.pt"
+    },
+    "dataset": {
+      "path": "web/tasks/task-20260715-001/data.effective.yaml",
+      "format": "yolo-yaml"
+    },
+    "train_config": {
+      "epochs": 60,
+      "imgsz": 640,
+      "batch": 32
+    },
+    "provider_payload": {
+      "kwargs": {
+        "lr0": 0.0005
+      }
+    }
   },
   "validation_runs": [
     {
       "name": "base-val",
-      "data": "datasets/base-val.yaml"
+      "toolchain": "yolo",
+      "request": {
+        "dataset": {
+          "path": "datasets/base-val.yaml",
+          "format": "yolo-yaml"
+        }
+      }
     },
     {
       "name": "night-val",
-      "data": "datasets/night-val.yaml"
+      "toolchain": "yolo",
+      "request": {
+        "dataset": {
+          "path": "datasets/night-val.yaml",
+          "format": "yolo-yaml"
+        }
+      }
     }
   ]
 }
@@ -592,7 +691,7 @@ names:
 现有这些能力可以继续用：
 
 - 本地 / Docker 训练模式；
-- 现有 `train_kwargs` 生成方式；
+- 现有训练配置生成逻辑；
 - 现有 worker 执行流程；
 - 现有 SwanLab 集成；
 - 现有日志与任务文件落盘方式。
@@ -614,26 +713,33 @@ names:
 当前后端主要做一次性任务创建。新方案下要新增：
 
 1. 训练目标存储；
-2. 节点树存储；
+2. 多 root + 节点树存储；
 3. 父子节点继承计算；
 4. 数据集累积加法计算；
 5. 节点有效参数计算；
-6. 多验证集评估调度；
-7. 节点评估摘要生成。
+6. toolchain 适配层与请求分发；
+7. 多验证集评估调度；
+8. 节点评估摘要生成。
 
-但最终执行训练时，仍然调用现有训练代码，不需要推翻现有 worker。
+但最终执行训练时，仍然可以通过 `yolo` adapter 调用现有训练代码，不需要推翻现有 worker。
 
 ## 14. 约束与校验
 
 ### 14.1 创建分支时的阻断项
 
 - 未填写分支原因；
-- 未选择父节点；
+- 未选择父节点，且当前也不是在创建新 root；
 - 新增数据集为空；
 - 新增数据集与父节点已有集合完全重复；
 - 试图删除父节点已有数据；
 - 新类别破坏旧类别索引；
 - 模型任务类型与新增数据集不匹配。
+
+创建 root 时额外阻断：
+
+- 首个 root 未配置初始数据集；
+- 新 root 与现有 root 的模型来源和数据来源完全重复；
+- root 初始数据集为空。
 
 ### 14.2 启动训练时的阻断项
 
@@ -657,10 +763,12 @@ names:
 ### P0
 
 - 新增训练目标概念；
+- 允许一个目标下维护多个 root；
 - 新增节点树与父子关系；
 - 分支原因必填；
 - 子节点数据集只允许加法；
 - 目标默认参数 + 节点覆盖参数；
+- toolchain 公共接口 + `yolo` 适配；
 - 保持现有训练方法执行。
 
 ### P1
@@ -681,13 +789,13 @@ names:
 
 新的训练页面不再服务于“一次性发起训练”，而是服务于“围绕一个训练目标持续演进模型”。
 
-最关键的四个约束是：
+最关键的六个约束是：
 
 1. 只保留训练目标入口；
-2. 所有训练节点都以瀑布流方式挂在父节点下；
+2. 一个目标可以有多个 root，所有训练节点都挂在某个 root 或父节点下；
 3. 每个分支必须说明分支原因；
 4. 子节点只允许对父节点数据集做加法；
 5. 每次训练只做默认参数继承或局部调整；
 6. 每次训练都可以挂多个验证集做独立评估。
 
-底层训练仍然走现有方式，但上层组织模型从“单任务表单”升级为“目标树 + 分支演进 + 多验证集评估”。
+底层训练仍然走现有方式，但会先经过统一 toolchain 接口；上层组织模型从“单任务表单”升级为“目标树 + 分支演进 + 多验证集评估”。

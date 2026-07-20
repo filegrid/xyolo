@@ -126,6 +126,15 @@ xyolo web --host 0.0.0.0 --port 8860
 
 The server reads the bundled frontend assets from the installed wheel. Task metadata and training output remain in the current workspace.
 
+## Web console layout
+
+The web console now uses a 1Panel-style left-right workspace:
+
+- A persistent left sidebar switches between **Datasets**, **Training**, **Models**, **Evaluation**, and **Deploy**
+- The sidebar can be collapsed and the state is remembered in the browser
+- The right content pane stays focused on the active module, and the training module keeps **New / List / Template** as secondary tabs in the header
+- Language, theme, environment details, and external tool entry points stay in the top action area of the content pane
+
 ## Frontend development
 
 ```bash

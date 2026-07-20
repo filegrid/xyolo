@@ -1,11 +1,11 @@
+import { type ComponentType, useEffect, useMemo, useState } from 'react'
 import {
   BarChart3,
   Boxes,
   Brain,
   ChevronDown,
-  ChevronRight,
+  ChevronLeft,
   Database,
-  Ellipsis,
   FolderOpen,
   Globe,
   Languages,
@@ -20,7 +20,6 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -28,6 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 
 type Section = 'dataset' | 'train' | 'model' | 'eval' | 'deploy'
 type TrainView = 'new' | 'list' | 'template'
@@ -35,6 +35,7 @@ type Mode = 'venv' | 'docker'
 type ThemeChoice = 'system' | 'light' | 'dark'
 type Language = 'zh' | 'en'
 type ActionType = 'launch' | 'save_draft' | 'save_template'
+type NavIcon = ComponentType<{ className?: string }>
 
 type EnvironmentPackage = {
   name: string
@@ -116,6 +117,21 @@ type ParamDefinition = {
   common?: boolean
 }
 
+type NavButtonProps = {
+  active: boolean
+  collapsed: boolean
+  icon: NavIcon
+  label: string
+  badge?: string
+  onClick: () => void
+}
+
+type StatCardProps = {
+  icon: NavIcon
+  label: string
+  value: string
+}
+
 const SECTION_OPTIONS = [
   { value: 'dataset', labelZh: '数据集', labelEn: 'Datasets', icon: Database },
   { value: 'train', labelZh: '训练', labelEn: 'Training', icon: Boxes },
@@ -184,6 +200,7 @@ const DEFAULT_FORM: TaskForm = {
 const I18N = {
   zh: {
     title: 'XYolo',
+    appTagline: 'YOLO 训练工作台',
     loading: '加载中...',
     train: '训练',
     datasets: '数据集',
@@ -246,9 +263,29 @@ const I18N = {
     toolReady: '服务已就绪，正在打开。',
     toolUnavailable: '当前入口不可用',
     comingSoon: '该大类后续再补，现在先保留结构。',
+    collapseSidebar: '收起导航',
+    expandSidebar: '展开导航',
+    workspaceSummary: '项目工作区',
+    workspaceHint: '左侧负责模块切换，右侧专注当前工作内容。',
+    currentSectionHint: '控制台采用 1Panel 风格的左右结构，导航可随时折叠。',
+    datasetsCount: '数据集',
+    modelsCount: '模型',
+    tasksCount: '任务',
+    templatesCount: '模板',
+    draftsCount: '草稿',
+    openEnvironment: '环境信息',
+    trainDescription: '在一个工作台里完成任务创建、任务列表和模板复用。',
+    datasetDescription: '查看当前工作目录下的可用数据集配置。',
+    modelDescription: '查看当前工作目录下的模型与权重文件。',
+    evalDescription: '评估模块预留，后续补齐指标和报告能力。',
+    deployDescription: '部署模块预留，后续补齐推理和发布流程。',
+    newDescription: '填写模型、数据集和训练参数，直接发起新任务。',
+    listDescription: '查看训练任务状态，并按需打开对应日志。',
+    templateDescription: '复用已有训练模板，减少重复配置。',
   },
   en: {
     title: 'XYolo',
+    appTagline: 'YOLO workspace',
     loading: 'Loading...',
     train: 'Training',
     datasets: 'Datasets',
@@ -311,8 +348,75 @@ const I18N = {
     toolReady: 'Service is ready and opening now.',
     toolUnavailable: 'This entry is unavailable.',
     comingSoon: 'This category is reserved for later.',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
+    workspaceSummary: 'Workspace',
+    workspaceHint: 'Use the left sidebar for navigation and keep the right pane focused on the current task.',
+    currentSectionHint: 'The console now follows a 1Panel-style left-right shell with a collapsible sidebar.',
+    datasetsCount: 'Datasets',
+    modelsCount: 'Models',
+    tasksCount: 'Tasks',
+    templatesCount: 'Templates',
+    draftsCount: 'Drafts',
+    openEnvironment: 'Environment',
+    trainDescription: 'Create runs, inspect job history, and reuse templates in one workspace.',
+    datasetDescription: 'Review the dataset configs available in the current workspace.',
+    modelDescription: 'Review model and weight files available in the current workspace.',
+    evalDescription: 'The evaluation module is reserved for future metrics and reporting.',
+    deployDescription: 'The deploy module is reserved for future inference and release flows.',
+    newDescription: 'Fill in model, dataset, and training parameters to launch a new task.',
+    listDescription: 'Review training status and open logs when needed.',
+    templateDescription: 'Reuse saved templates to avoid repeated configuration work.',
   },
 } as const
+
+function NavigationButton({ active, collapsed, icon: Icon, label, badge, onClick }: NavButtonProps) {
+  return (
+    <button
+      type="button"
+      title={label}
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition-colors',
+        collapsed && 'justify-center px-0',
+        active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+      )}
+    >
+      <Icon className="size-5 shrink-0" />
+      {!collapsed ? (
+        <>
+          <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+          {badge ? (
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-xs',
+                active ? 'bg-primary-foreground/15 text-primary-foreground' : 'bg-muted text-muted-foreground',
+              )}
+            >
+              {badge}
+            </span>
+          ) : null}
+        </>
+      ) : null}
+    </button>
+  )
+}
+
+function StatCard({ icon: Icon, label, value }: StatCardProps) {
+  return (
+    <Card className="border-border/80 bg-card/90">
+      <CardContent className="flex items-center justify-between p-5 pt-5">
+        <div className="space-y-1">
+          <div className="text-sm text-muted-foreground">{label}</div>
+          <div className="text-2xl font-semibold tracking-tight">{value}</div>
+        </div>
+        <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Icon className="size-5" />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 function getCookie(name: string): string {
   const match = document.cookie.split('; ').find((row) => row.startsWith(`${name}=`))
@@ -372,15 +476,13 @@ function App() {
     const cookie = getCookie('xyolo-theme')
     return cookie === 'light' || cookie === 'dark' || cookie === 'system' ? cookie : 'system'
   })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getCookie('xyolo-sidebar-collapsed') === '1')
   const [section, setSection] = useState<Section>('train')
   const [trainView, setTrainView] = useState<TrainView>('new')
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null)
   const [environmentDetails, setEnvironmentDetails] = useState<EnvironmentDetails | null>(null)
   const [environmentOpen, setEnvironmentOpen] = useState(false)
   const [environmentLoading, setEnvironmentLoading] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [langMenuOpen, setLangMenuOpen] = useState(false)
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [commonParamMenuOpen, setCommonParamMenuOpen] = useState(false)
   const [advancedParamMenuOpen, setAdvancedParamMenuOpen] = useState(false)
   const [textMode, setTextMode] = useState(false)
@@ -396,7 +498,10 @@ function App() {
 
   const text = I18N[lang]
   const currentSection = SECTION_OPTIONS.find((item) => item.value === section) ?? SECTION_OPTIONS[1]
+  const currentSectionLabel = lang === 'en' ? currentSection.labelEn : currentSection.labelZh
   const CurrentSectionIcon = currentSection.icon
+  const currentTrainView = TRAIN_VIEW_OPTIONS.find((item) => item.value === trainView) ?? TRAIN_VIEW_OPTIONS[0]
+  const currentTrainViewLabel = lang === 'en' ? currentTrainView.labelEn : currentTrainView.labelZh
   const availableParams = useMemo(() => {
     return PARAM_DEFINITIONS.filter((item) => !selectedParamKeys.includes(item.key)).sort((left, right) => {
       if (left.common === right.common) return 0
@@ -405,6 +510,20 @@ function App() {
   }, [selectedParamKeys])
   const commonParams = availableParams.filter((item) => item.common)
   const advancedParams = availableParams.filter((item) => !item.common)
+
+  const sectionDescription = useMemo(() => {
+    if (section === 'train') {
+      if (trainView === 'new') return text.newDescription
+      if (trainView === 'list') return text.listDescription
+      return text.templateDescription
+    }
+    if (section === 'dataset') return text.datasetDescription
+    if (section === 'model') return text.modelDescription
+    if (section === 'eval') return text.evalDescription
+    return text.deployDescription
+  }, [section, text, trainView])
+
+  const headerTitle = section === 'train' ? `${currentSectionLabel} · ${currentTrainViewLabel}` : currentSectionLabel
 
   const showToast = (message: string) => {
     setToast(message)
@@ -440,9 +559,11 @@ function App() {
     }
     for (const [key, value] of Object.entries(yamlMap)) merged[key] = value
     const keys = Object.keys(merged)
-    setSelectedParamKeys(keys.length > 0 ? keys : ['epochs', 'batch', 'imgsz'])
-    setParamValues(keys.length > 0 ? merged : { epochs: '200', batch: '8', imgsz: '640' })
-    setYamlText(buildYamlText(keys.length > 0 ? merged : { epochs: '200', batch: '8', imgsz: '640' }, keys.length > 0 ? keys : ['epochs', 'batch', 'imgsz']))
+    const nextKeys = keys.length > 0 ? keys : ['epochs', 'batch', 'imgsz']
+    const nextValues = keys.length > 0 ? merged : { epochs: '200', batch: '8', imgsz: '640' }
+    setSelectedParamKeys(nextKeys)
+    setParamValues(nextValues)
+    setYamlText(buildYamlText(nextValues, nextKeys))
     setForm({
       ...nextForm,
       name: preserveName ? form.name : nextForm.name || generateName(),
@@ -592,6 +713,10 @@ function App() {
   }, [themeChoice])
 
   useEffect(() => {
+    setCookie('xyolo-sidebar-collapsed', sidebarCollapsed ? '1' : '0')
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
     reloadBootstrap().catch((error: Error) => showToast(error.message))
   }, [])
 
@@ -599,7 +724,7 @@ function App() {
     if (!textMode) {
       setYamlText(buildYamlText(paramValues, selectedParamKeys))
     }
-  }, [textMode])
+  }, [paramValues, selectedParamKeys, textMode])
 
   if (!bootstrap) {
     return (
@@ -612,124 +737,579 @@ function App() {
   }
 
   const templates = bootstrap.templates ?? []
+  const unavailableTools = bootstrap.tools.filter((tool) => !tool.available && tool.reason)
+  const sectionCounts: Record<Section, string> = {
+    dataset: String(bootstrap.datasets.length),
+    train: String(bootstrap.tasks.length),
+    model: String(bootstrap.models.length),
+    eval: '--',
+    deploy: '--',
+  }
+  const statCards = [
+    { icon: Database, label: text.datasetsCount, value: String(bootstrap.datasets.length) },
+    { icon: Brain, label: text.modelsCount, value: String(bootstrap.models.length) },
+    { icon: Boxes, label: text.tasksCount, value: String(bootstrap.tasks.length) },
+    { icon: Save, label: text.templatesCount, value: String(bootstrap.templates.length) },
+  ]
 
   return (
-    <div className="mx-auto max-w-7xl px-5 py-6">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">{text.title}</h1>
-
-        <div className="relative flex items-center gap-2">
-          <div className="group relative">
-            <button
-              type="button"
-              className="flex h-9 items-center gap-1 rounded-md border px-2.5 text-sm hover:bg-accent"
-              aria-label={text.language}
-              onClick={() => {
-                setLangMenuOpen((current) => !current)
-                setThemeMenuOpen(false)
-                setMenuOpen(false)
-              }}
-            >
-              {lang === 'en' ? <Globe className="size-4" /> : <Languages className="size-4" />}
-              <ChevronDown className="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
-            {langMenuOpen ? (
-              <div className="absolute right-0 top-11 z-40 min-w-32 rounded-lg border bg-background p-1 shadow-lg">
-                <button type="button" className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setLang('zh'); setLangMenuOpen(false) }}>
-                  <Languages className="size-4" />
-                  中文
-                </button>
-                <button type="button" className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setLang('en'); setLangMenuOpen(false) }}>
-                  <Globe className="size-4" />
-                  English
-                </button>
+    <>
+      <div className="flex min-h-screen bg-muted/20">
+        <aside className={cn('shrink-0 border-r border-border/70 bg-card/95 backdrop-blur transition-[width] duration-200', sidebarCollapsed ? 'w-20' : 'w-72')}>
+          <div className="sticky top-0 flex h-screen flex-col gap-5 px-3 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className={cn('flex min-w-0 items-center gap-3', sidebarCollapsed && 'justify-center')}>
+                <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
+                  <Boxes className="size-5" />
+                </div>
+                {!sidebarCollapsed ? (
+                  <div className="min-w-0">
+                    <div className="truncate text-base font-semibold tracking-tight">{text.title}</div>
+                    <div className="truncate text-xs text-muted-foreground">{text.appTagline}</div>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-
-          <div className="group relative">
-            <button
-              type="button"
-              className="flex h-9 items-center gap-1 rounded-md border px-2.5 text-sm hover:bg-accent"
-              aria-label={text.theme}
-              onClick={() => {
-                setThemeMenuOpen((current) => !current)
-                setLangMenuOpen(false)
-                setMenuOpen(false)
-              }}
-            >
-              {themeChoice === 'light' ? <Sun className="size-4" /> : themeChoice === 'dark' ? <MoonStar className="size-4" /> : <Monitor className="size-4" />}
-              <ChevronDown className="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
-            {themeMenuOpen ? (
-              <div className="absolute right-0 top-11 z-40 min-w-36 rounded-lg border bg-background p-1 shadow-lg">
-                <button type="button" className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setThemeChoice('system'); setThemeMenuOpen(false) }}>
-                  <Monitor className="size-4" />
-                  {text.system}
-                </button>
-                <button type="button" className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setThemeChoice('light'); setThemeMenuOpen(false) }}>
-                  <Sun className="size-4" />
-                  {text.light}
-                </button>
-                <button type="button" className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setThemeChoice('dark'); setThemeMenuOpen(false) }}>
-                  <MoonStar className="size-4" />
-                  {text.dark}
-                </button>
-              </div>
-            ) : null}
-          </div>
-
-          <Button variant="outline" size="icon" onClick={() => setMenuOpen((current) => !current)} aria-label="menu">
-            <Ellipsis className="size-4" />
-          </Button>
-
-          {menuOpen ? (
-            <div className="absolute right-0 top-11 z-40 min-w-44 rounded-lg border bg-background p-1 shadow-lg">
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                onClick={() => {
-                  setMenuOpen(false)
-                  setEnvironmentOpen(true)
-                  if (!environmentDetails && !environmentLoading) {
-                    loadEnvironmentDetails().catch((error: Error) => showToast(error.message))
-                  }
-                }}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={sidebarCollapsed ? text.expandSidebar : text.collapseSidebar}
+                title={sidebarCollapsed ? text.expandSidebar : text.collapseSidebar}
+                onClick={() => setSidebarCollapsed((current) => !current)}
               >
-                <TerminalSquare className="size-4" />
-                {text.env}
-              </button>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                onClick={() => {
-                  setMenuOpen(false)
-                  openTool('dstack').catch(() => undefined)
-                }}
-              >
-                <Globe className="size-4" />
-                {text.dstack}
-              </button>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                onClick={() => {
-                  setMenuOpen(false)
-                  openTool('swanlab').catch(() => undefined)
-                }}
-              >
-                <Globe className="size-4" />
-                {text.swanlab}
-              </button>
+                <ChevronLeft className={cn('size-4 transition-transform', sidebarCollapsed && 'rotate-180')} />
+              </Button>
             </div>
-          ) : null}
-        </div>
+
+            {!sidebarCollapsed ? (
+              <div className="rounded-2xl border bg-muted/30 p-4">
+                <div className="text-sm font-medium">{text.workspaceSummary}</div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{text.workspaceHint}</p>
+                <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-xl bg-background/80 px-3 py-2">
+                    <div className="text-muted-foreground">{text.tasksCount}</div>
+                    <div className="mt-1 text-base font-semibold text-foreground">{bootstrap.tasks.length}</div>
+                  </div>
+                  <div className="rounded-xl bg-background/80 px-3 py-2">
+                    <div className="text-muted-foreground">{text.draftsCount}</div>
+                    <div className="mt-1 text-base font-semibold text-foreground">{bootstrap.drafts.length}</div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <nav className="flex-1 space-y-1">
+              {SECTION_OPTIONS.map((item) => {
+                const label = lang === 'en' ? item.labelEn : item.labelZh
+                return (
+                  <NavigationButton
+                    key={item.value}
+                    active={section === item.value}
+                    collapsed={sidebarCollapsed}
+                    icon={item.icon}
+                    label={label}
+                    badge={sectionCounts[item.value]}
+                    onClick={() => setSection(item.value)}
+                  />
+                )
+              })}
+            </nav>
+
+            {!sidebarCollapsed ? (
+              <div className="rounded-2xl border bg-muted/30 p-4 text-xs leading-5 text-muted-foreground">
+                {text.currentSectionHint}
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
+        <main className="min-w-0 flex-1">
+          <div className="mx-auto flex max-w-[1600px] flex-col gap-6 px-5 py-6 lg:px-6">
+            <header className="flex flex-col gap-4 rounded-3xl border border-border/70 bg-card/90 p-5 shadow-sm">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="space-y-3">
+                  <div className="inline-flex items-center gap-2 rounded-full border bg-muted/40 px-3 py-1 text-xs text-muted-foreground">
+                    <CurrentSectionIcon className="size-3.5" />
+                    <span>{currentSectionLabel}</span>
+                  </div>
+                  <div>
+                    <h1 className="text-2xl font-semibold tracking-tight">{headerTitle}</h1>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{sectionDescription}</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                  <Select value={lang} onValueChange={(value) => setLang(value as Language)}>
+                    <SelectTrigger className="w-[132px]">
+                      <div className="flex items-center gap-2">
+                        {lang === 'en' ? <Globe className="size-4" /> : <Languages className="size-4" />}
+                        <span>{lang === 'en' ? 'English' : '中文'}</span>
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="zh">中文</SelectItem>
+                      <SelectItem value="en">English</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Select value={themeChoice} onValueChange={(value) => setThemeChoice(value as ThemeChoice)}>
+                    <SelectTrigger className="w-[148px]">
+                      <div className="flex items-center gap-2">
+                        {themeChoice === 'light' ? <Sun className="size-4" /> : themeChoice === 'dark' ? <MoonStar className="size-4" /> : <Monitor className="size-4" />}
+                        <span>{themeChoice === 'light' ? text.light : themeChoice === 'dark' ? text.dark : text.system}</span>
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="system">{text.system}</SelectItem>
+                      <SelectItem value="light">{text.light}</SelectItem>
+                      <SelectItem value="dark">{text.dark}</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setEnvironmentOpen(true)
+                      if (!environmentDetails && !environmentLoading) {
+                        loadEnvironmentDetails().catch((error: Error) => showToast(error.message))
+                      }
+                    }}
+                  >
+                    <TerminalSquare className="size-4" />
+                    {text.openEnvironment}
+                  </Button>
+
+                  {bootstrap.tools.map((tool) => (
+                    <Button
+                      key={tool.name}
+                      variant="outline"
+                      disabled={!tool.available}
+                      title={tool.available ? tool.url : tool.reason}
+                      onClick={() => openTool(tool.name).catch(() => undefined)}
+                    >
+                      <Globe className="size-4" />
+                      {tool.display_name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {section === 'train' ? (
+                <div className="inline-flex w-fit flex-wrap items-center gap-1 rounded-2xl border bg-muted/40 p-1">
+                  {TRAIN_VIEW_OPTIONS.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={cn(
+                        'rounded-xl px-3.5 py-2 text-sm transition-colors',
+                        trainView === item.value ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                      )}
+                      onClick={() => setTrainView(item.value)}
+                    >
+                      {lang === 'en' ? item.labelEn : item.labelZh}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {unavailableTools.length > 0 ? (
+                <div className="text-xs text-muted-foreground">
+                  {unavailableTools.map((tool) => `${tool.display_name}: ${tool.reason}`).join(' · ')}
+                </div>
+              ) : null}
+            </header>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {statCards.map((item) => (
+                <StatCard key={item.label} icon={item.icon} label={item.label} value={item.value} />
+              ))}
+            </div>
+
+            {section === 'dataset' ? (
+              <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/90 shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-left text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bootstrap.datasets.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-muted-foreground">{text.noDatasets}</td>
+                      </tr>
+                    ) : (
+                      bootstrap.datasets.map((item) => (
+                        <tr key={item} className="border-t">
+                          <td className="px-4 py-3 font-medium">{item}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {section === 'model' ? (
+              <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/90 shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-left text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bootstrap.models.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-muted-foreground">{text.noModels}</td>
+                      </tr>
+                    ) : (
+                      bootstrap.models.map((item) => (
+                        <tr key={item} className="border-t">
+                          <td className="px-4 py-3 font-medium">{item}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {section === 'eval' || section === 'deploy' ? (
+              <div className="rounded-3xl border border-border/70 bg-card/90 p-5 text-sm text-muted-foreground shadow-sm">{text.comingSoon}</div>
+            ) : null}
+
+            {section === 'train' && trainView === 'list' ? (
+              <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/90 shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-left text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
+                      <th className="px-4 py-3 font-medium">{text.status}</th>
+                      <th className="px-4 py-3 font-medium">{text.createdAt}</th>
+                      <th className="px-4 py-3 font-medium">{text.log}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bootstrap.tasks.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-muted-foreground" colSpan={4}>
+                          {text.noTasks}
+                        </td>
+                      </tr>
+                    ) : (
+                      bootstrap.tasks.map((item) => (
+                        <tr key={item.id} className="border-t">
+                          <td className="px-4 py-3 font-medium">{item.name}</td>
+                          <td className="px-4 py-3">{item.status || '-'}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{item.created_at}</td>
+                          <td className="px-4 py-3">
+                            {item.log_path ? (
+                              <a className="text-primary hover:underline" href={`/logs?id=${item.id}`} target="_blank" rel="noreferrer">
+                                {text.log}
+                              </a>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {section === 'train' && trainView === 'template' ? (
+              <div className="overflow-hidden rounded-3xl border border-border/70 bg-card/90 shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-left text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
+                      <th className="px-4 py-3 font-medium">{text.createdAt}</th>
+                      <th className="px-4 py-3 font-medium">{text.use}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {templates.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-muted-foreground" colSpan={3}>
+                          {text.noTemplates}
+                        </td>
+                      </tr>
+                    ) : (
+                      templates.map((item) => (
+                        <tr key={item.id} className="border-t">
+                          <td className="px-4 py-3 font-medium">{item.name}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{item.updated_at || item.created_at}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              className="text-primary hover:underline"
+                              onClick={() => loadRecord('templates', item.id).catch((error: Error) => showToast(error.message))}
+                            >
+                              {text.use}
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {section === 'train' && trainView === 'new' ? (
+              <Card className="rounded-3xl border-border/70 bg-card/90 shadow-sm">
+                <CardContent className="space-y-5 pt-6">
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">{text.name}</label>
+                      <Input value={form.name} readOnly />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">{text.notes}</label>
+                      <Input value={form.notes} onChange={(event) => setFormValue('notes', event.target.value)} />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">{text.model}</label>
+                      <Input value={form.model} onChange={(event) => setFormValue('model', event.target.value)} list="model-options" placeholder="best.pt / yolov8s.pt / ./other/model.pt" />
+                      <p className="text-xs text-muted-foreground">{text.modelHint}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">{text.dataset}</label>
+                      <Input value={form.data} onChange={(event) => setFormValue('data', event.target.value)} list="dataset-options" placeholder="my_dataset.yaml / ./other/data.yaml" />
+                      <p className="text-xs text-muted-foreground">{text.datasetHint}</p>
+                    </div>
+                  </div>
+
+                  <datalist id="model-options">
+                    {bootstrap.models.map((item) => (
+                      <option key={item} value={item} />
+                    ))}
+                  </datalist>
+                  <datalist id="dataset-options">
+                    {bootstrap.datasets.map((item) => (
+                      <option key={item} value={item} />
+                    ))}
+                  </datalist>
+
+                  <div className="space-y-4 rounded-2xl border p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="font-medium">{text.paramTitle}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setCommonParamMenuOpen((current) => !current)
+                              setAdvancedParamMenuOpen(false)
+                            }}
+                          >
+                            <Plus className="size-4" />
+                            {text.common}
+                          </Button>
+                          {commonParamMenuOpen ? (
+                            <div className="absolute right-0 top-10 z-30 max-h-80 min-w-72 overflow-y-auto rounded-lg border bg-background p-1 shadow-lg">
+                              {commonParams.length === 0 ? (
+                                <div className="px-3 py-2 text-sm text-muted-foreground">-</div>
+                              ) : (
+                                commonParams.map((item) => (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    className="flex w-full flex-col rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+                                    onClick={() => addParam(item.key)}
+                                  >
+                                    <span className="font-medium">{item.key}</span>
+                                    <span className="text-xs text-muted-foreground">{lang === 'en' ? item.descriptionEn : item.descriptionZh}</span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="relative">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setAdvancedParamMenuOpen((current) => !current)
+                              setCommonParamMenuOpen(false)
+                            }}
+                          >
+                            <Plus className="size-4" />
+                            {text.advancedParams}
+                          </Button>
+                          {advancedParamMenuOpen ? (
+                            <div className="absolute right-0 top-10 z-30 max-h-80 min-w-72 overflow-y-auto rounded-lg border bg-background p-1 shadow-lg">
+                              {advancedParams.length === 0 ? (
+                                <div className="px-3 py-2 text-sm text-muted-foreground">-</div>
+                              ) : (
+                                advancedParams.map((item) => (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    className="flex w-full flex-col rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+                                    onClick={() => addParam(item.key)}
+                                  >
+                                    <span className="font-medium">{item.key}</span>
+                                    <span className="text-xs text-muted-foreground">{lang === 'en' ? item.descriptionEn : item.descriptionZh}</span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (textMode) {
+                              const parsed = parseYamlText(yamlText)
+                              const keys = Object.keys(parsed)
+                              setSelectedParamKeys(keys)
+                              setParamValues(parsed)
+                            } else {
+                              setYamlText(buildYamlText(paramValues, selectedParamKeys))
+                            }
+                            setTextMode((current) => !current)
+                          }}
+                        >
+                          <Pencil className="size-4" />
+                          {textMode ? text.table : text.edit}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {textMode ? (
+                      <Textarea value={yamlText} onChange={(event) => setYamlText(event.target.value)} className="min-h-[260px] font-mono" />
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedParamKeys.map((key) => (
+                            <span key={key} className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-3 py-1 text-xs font-medium">
+                              <button type="button" className="hover:text-primary" onClick={() => openEditParam(key)}>
+                                {`${key}=${paramValues[key] ?? ''}`}
+                              </button>
+                              <button type="button" className="rounded-full p-0.5 hover:bg-background" onClick={() => removeParam(key)}>
+                                <X className="size-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+
+                        {editingKey ? (
+                          <div className="overflow-hidden rounded-lg border">
+                            <table className="w-full text-sm">
+                              <thead className="bg-muted/50 text-left text-muted-foreground">
+                                <tr>
+                                  <th className="px-4 py-3 font-medium">{text.param}</th>
+                                  <th className="px-4 py-3 font-medium">{text.value}</th>
+                                  <th className="px-4 py-3 font-medium">{text.description}</th>
+                                  <th className="px-4 py-3 font-medium"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(() => {
+                                  const definition = PARAM_DEFINITIONS.find((item) => item.key === editingKey)
+                                  const savedValue = paramValues[editingKey] ?? ''
+                                  const dirty = editingDraftValue !== savedValue
+                                  return (
+                                    <tr key={editingKey} className="border-t">
+                                      <td className="px-4 py-3 font-medium">{editingKey}</td>
+                                      <td className="px-4 py-2">
+                                        <Input value={editingDraftValue} placeholder={definition?.placeholder ?? ''} onChange={(event) => setEditingDraftValue(event.target.value)} />
+                                      </td>
+                                      <td className="px-4 py-3 text-muted-foreground">{lang === 'en' ? definition?.descriptionEn : definition?.descriptionZh}</td>
+                                      <td className="px-4 py-2 text-right">
+                                        <div className="flex justify-end gap-2">
+                                          <Button size="sm" variant="outline" onClick={() => removeParam(editingKey)}>
+                                            {lang === 'en' ? 'Remove' : '删除'}
+                                          </Button>
+                                          <Button size="sm" variant="outline" disabled={!dirty} onClick={() => saveRowParam(editingKey)}>
+                                            {text.save}
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )
+                                })()}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <button type="button" className="text-left text-sm font-medium text-primary hover:underline">
+                          {text.importTemplate}
+                        </button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-md">
+                        <DialogHeader>
+                          <DialogTitle>{text.importTemplate}</DialogTitle>
+                          <DialogDescription>{text.chooseTemplate}</DialogDescription>
+                        </DialogHeader>
+                        {templates.length === 0 ? (
+                          <div className="text-sm text-muted-foreground">{text.noTemplates}</div>
+                        ) : (
+                          <div className="space-y-3">
+                            <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
+                              <SelectTrigger>
+                                <span>{selectedTemplateId ? templates.find((item) => item.id === selectedTemplateId)?.name : text.noSelection}</span>
+                              </SelectTrigger>
+                              <SelectContent>
+                                {templates.map((item) => (
+                                  <SelectItem key={item.id} value={item.id}>
+                                    {item.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button className="w-full" onClick={() => loadRecord('templates', selectedTemplateId)} disabled={!selectedTemplateId}>
+                              <FolderOpen className="size-4" />
+                              {text.loadTemplate}
+                            </Button>
+                          </div>
+                        )}
+                      </DialogContent>
+                    </Dialog>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => runAction('save_draft')} disabled={busyAction !== ''}>
+                        <Save className="size-4" />
+                        {busyAction === 'save_draft' ? `${text.saveDraft}...` : text.saveDraft}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => runAction('save_template')} disabled={busyAction !== ''}>
+                        <Save className="size-4" />
+                        {busyAction === 'save_template' ? `${text.saveTemplate}...` : text.saveTemplate}
+                      </Button>
+                      <Button size="sm" onClick={() => runAction('launch')} disabled={busyAction !== ''}>
+                        <Play className="size-4" />
+                        {busyAction === 'launch' ? `${text.launch}...` : text.launch}
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
+        </main>
       </div>
 
       <Dialog open={environmentOpen} onOpenChange={setEnvironmentOpen}>
-        <DialogTrigger asChild>
-          <span className="hidden" />
-        </DialogTrigger>
         <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>{text.envTitle}</DialogTitle>
@@ -780,7 +1360,7 @@ function App() {
                 <CollapsibleTrigger asChild>
                   <Button variant="ghost" className="flex h-auto w-full items-center justify-between rounded-lg p-4">
                     <span className="font-medium">{`${text.packageList} (${environmentDetails.packages.length})`}</span>
-                    <Pencil className="size-4" />
+                    <ChevronDown className="size-4" />
                   </Button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="border-t">
@@ -807,364 +1387,8 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Select value={section} onValueChange={(value) => setSection(value as Section)}>
-          <SelectTrigger className="h-10 w-[180px]">
-            <div className="flex items-center gap-2">
-              <CurrentSectionIcon className="size-4" />
-              <span>{lang === 'en' ? currentSection.labelEn : currentSection.labelZh}</span>
-            </div>
-          </SelectTrigger>
-          <SelectContent>
-            {SECTION_OPTIONS.map((item) => {
-              const Icon = item.icon
-              return (
-                <SelectItem key={item.value} value={item.value}>
-                  <div className="flex items-center gap-2">
-                    <Icon className="size-4" />
-                    {lang === 'en' ? item.labelEn : item.labelZh}
-                  </div>
-                </SelectItem>
-              )
-            })}
-          </SelectContent>
-        </Select>
-
-        {section === 'train' ? (
-          <>
-            <ChevronRight className="size-4 text-muted-foreground" />
-            <div className="inline-flex rounded-lg border bg-muted/40 p-1">
-              {TRAIN_VIEW_OPTIONS.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`rounded-md px-3 py-1.5 text-sm ${trainView === item.value ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
-                  onClick={() => setTrainView(item.value as TrainView)}
-                >
-                  {lang === 'en' ? item.labelEn : item.labelZh}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : null}
-      </div>
-
-      {section === 'dataset' ? (
-        <div className="overflow-hidden rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-muted-foreground">
-              <tr><th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th></tr>
-            </thead>
-            <tbody>
-              {bootstrap.datasets.length === 0 ? <tr><td className="px-4 py-6 text-muted-foreground">{text.noDatasets}</td></tr> : bootstrap.datasets.map((item) => <tr key={item} className="border-t"><td className="px-4 py-3 font-medium">{item}</td></tr>)}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {section === 'model' ? (
-        <div className="overflow-hidden rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-muted-foreground">
-              <tr><th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th></tr>
-            </thead>
-            <tbody>
-              {bootstrap.models.length === 0 ? <tr><td className="px-4 py-6 text-muted-foreground">{text.noModels}</td></tr> : bootstrap.models.map((item) => <tr key={item} className="border-t"><td className="px-4 py-3 font-medium">{item}</td></tr>)}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {section === 'eval' || section === 'deploy' ? <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">{text.comingSoon}</div> : null}
-
-      {section === 'train' && trainView === 'list' ? (
-        <div className="overflow-hidden rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
-                <th className="px-4 py-3 font-medium">{text.status}</th>
-                <th className="px-4 py-3 font-medium">{text.createdAt}</th>
-                <th className="px-4 py-3 font-medium">{text.log}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bootstrap.tasks.length === 0 ? (
-                <tr><td className="px-4 py-6 text-muted-foreground" colSpan={4}>{text.noTasks}</td></tr>
-              ) : (
-                bootstrap.tasks.map((item) => (
-                  <tr key={item.id} className="border-t">
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
-                    <td className="px-4 py-3">{item.status || '-'}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{item.created_at}</td>
-                    <td className="px-4 py-3">{item.log_path ? <a className="text-primary hover:underline" href={`/logs?id=${item.id}`} target="_blank" rel="noreferrer">{text.log}</a> : '-'}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {section === 'train' && trainView === 'template' ? (
-        <div className="overflow-hidden rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3 font-medium">{lang === 'en' ? 'Name' : '名称'}</th>
-                <th className="px-4 py-3 font-medium">{text.createdAt}</th>
-                <th className="px-4 py-3 font-medium">{text.use}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {templates.length === 0 ? (
-                <tr><td className="px-4 py-6 text-muted-foreground" colSpan={3}>{text.noTemplates}</td></tr>
-              ) : (
-                templates.map((item) => (
-                  <tr key={item.id} className="border-t">
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{item.updated_at || item.created_at}</td>
-                    <td className="px-4 py-3">
-                      <button type="button" className="text-primary hover:underline" onClick={() => loadRecord('templates', item.id).catch((error: Error) => showToast(error.message))}>{text.use}</button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {section === 'train' && trainView === 'new' ? (
-        <Card>
-          <CardContent className="space-y-5 pt-6">
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{text.name}</label>
-                <Input value={form.name} readOnly />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{text.notes}</label>
-                <Input value={form.notes} onChange={(event) => setFormValue('notes', event.target.value)} />
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{text.model}</label>
-                <Input value={form.model} onChange={(event) => setFormValue('model', event.target.value)} list="model-options" placeholder="best.pt / yolov8s.pt / ./other/model.pt" />
-                <p className="text-xs text-muted-foreground">{text.modelHint}</p>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{text.dataset}</label>
-                <Input value={form.data} onChange={(event) => setFormValue('data', event.target.value)} list="dataset-options" placeholder="my_dataset.yaml / ./other/data.yaml" />
-                <p className="text-xs text-muted-foreground">{text.datasetHint}</p>
-              </div>
-            </div>
-
-            <datalist id="model-options">
-              {bootstrap.models.map((item) => <option key={item} value={item} />)}
-            </datalist>
-            <datalist id="dataset-options">
-              {bootstrap.datasets.map((item) => <option key={item} value={item} />)}
-            </datalist>
-
-            <div className="space-y-4 rounded-xl border p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="font-medium">{text.paramTitle}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <Button variant="outline" size="sm" onClick={() => { setCommonParamMenuOpen((current) => !current); setAdvancedParamMenuOpen(false) }}>
-                      <Plus className="size-4" />
-                      {text.common}
-                    </Button>
-                    {commonParamMenuOpen ? (
-                      <div className="absolute right-0 top-10 z-30 max-h-80 min-w-72 overflow-y-auto rounded-lg border bg-background p-1 shadow-lg">
-                        {commonParams.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">-</div>
-                        ) : (
-                          commonParams.map((item) => (
-                            <button
-                              key={item.key}
-                              type="button"
-                              className="flex w-full flex-col rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                              onClick={() => addParam(item.key)}
-                            >
-                              <span className="font-medium">{item.key}</span>
-                              <span className="text-xs text-muted-foreground">{lang === 'en' ? item.descriptionEn : item.descriptionZh}</span>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="relative">
-                    <Button variant="outline" size="sm" onClick={() => { setAdvancedParamMenuOpen((current) => !current); setCommonParamMenuOpen(false) }}>
-                      <Plus className="size-4" />
-                      {text.advancedParams}
-                    </Button>
-                    {advancedParamMenuOpen ? (
-                      <div className="absolute right-0 top-10 z-30 max-h-80 min-w-72 overflow-y-auto rounded-lg border bg-background p-1 shadow-lg">
-                        {advancedParams.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-muted-foreground">-</div>
-                        ) : (
-                          advancedParams.map((item) => (
-                            <button
-                              key={item.key}
-                              type="button"
-                              className="flex w-full flex-col rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-                              onClick={() => addParam(item.key)}
-                            >
-                              <span className="font-medium">{item.key}</span>
-                              <span className="text-xs text-muted-foreground">{lang === 'en' ? item.descriptionEn : item.descriptionZh}</span>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      if (textMode) {
-                        const parsed = parseYamlText(yamlText)
-                        const keys = Object.keys(parsed)
-                        setSelectedParamKeys(keys)
-                        setParamValues(parsed)
-                      } else {
-                        setYamlText(buildYamlText(paramValues, selectedParamKeys))
-                      }
-                      setTextMode((current) => !current)
-                    }}
-                  >
-                    <Pencil className="size-4" />
-                    {textMode ? text.table : text.edit}
-                  </Button>
-                </div>
-              </div>
-
-              {textMode ? (
-                <Textarea value={yamlText} onChange={(event) => setYamlText(event.target.value)} className="min-h-[260px] font-mono" />
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedParamKeys.map((key) => (
-                      <span key={key} className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-3 py-1 text-xs font-medium">
-                        <button type="button" className="hover:text-primary" onClick={() => openEditParam(key)}>
-                          {`${key}=${paramValues[key] ?? ''}`}
-                        </button>
-                        <button type="button" className="rounded-full p-0.5 hover:bg-background" onClick={() => removeParam(key)}>
-                          <X className="size-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-
-                  {editingKey ? (
-                    <div className="overflow-hidden rounded-lg border">
-                      <table className="w-full text-sm">
-                        <thead className="bg-muted/50 text-left text-muted-foreground">
-                          <tr>
-                            <th className="px-4 py-3 font-medium">{text.param}</th>
-                            <th className="px-4 py-3 font-medium">{text.value}</th>
-                            <th className="px-4 py-3 font-medium">{text.description}</th>
-                            <th className="px-4 py-3 font-medium"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(() => {
-                          const definition = PARAM_DEFINITIONS.find((item) => item.key === editingKey)
-                          const savedValue = paramValues[editingKey] ?? ''
-                          const dirty = editingDraftValue !== savedValue
-                          return (
-                            <tr key={editingKey} className="border-t">
-                              <td className="px-4 py-3 font-medium">{editingKey}</td>
-                              <td className="px-4 py-2">
-                                <Input
-                                  value={editingDraftValue}
-                                  placeholder={definition?.placeholder ?? ''}
-                                  onChange={(event) => setEditingDraftValue(event.target.value)}
-                                />
-                              </td>
-                              <td className="px-4 py-3 text-muted-foreground">{lang === 'en' ? definition?.descriptionEn : definition?.descriptionZh}</td>
-                              <td className="px-4 py-2 text-right">
-                                <div className="flex justify-end gap-2">
-                                  <Button size="sm" variant="outline" onClick={() => removeParam(editingKey)}>
-                                    {lang === 'en' ? 'Remove' : '删除'}
-                                  </Button>
-                                  <Button size="sm" variant="outline" disabled={!dirty} onClick={() => saveRowParam(editingKey)}>
-                                    {text.save}
-                                  </Button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })()}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <Dialog>
-                <DialogTrigger asChild>
-                  <button type="button" className="text-sm font-medium text-primary hover:underline">
-                    {text.importTemplate}
-                  </button>
-                </DialogTrigger>
-                <DialogContent className="max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>{text.importTemplate}</DialogTitle>
-                    <DialogDescription>{text.chooseTemplate}</DialogDescription>
-                  </DialogHeader>
-                  {templates.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">{text.noTemplates}</div>
-                  ) : (
-                    <div className="space-y-3">
-                      <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
-                        <SelectTrigger>
-                          <span>{selectedTemplateId ? templates.find((item) => item.id === selectedTemplateId)?.name : text.noSelection}</span>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {templates.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <Button className="w-full" onClick={() => loadRecord('templates', selectedTemplateId)} disabled={!selectedTemplateId}>
-                        <FolderOpen className="size-4" />
-                        {text.loadTemplate}
-                      </Button>
-                    </div>
-                  )}
-                </DialogContent>
-              </Dialog>
-
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => runAction('save_draft')} disabled={busyAction !== ''}>
-                  <Save className="size-4" />
-                  {busyAction === 'save_draft' ? `${text.saveDraft}...` : text.saveDraft}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => runAction('save_template')} disabled={busyAction !== ''}>
-                  <Save className="size-4" />
-                  {busyAction === 'save_template' ? `${text.saveTemplate}...` : text.saveTemplate}
-                </Button>
-                <Button size="sm" onClick={() => runAction('launch')} disabled={busyAction !== ''}>
-                  <Play className="size-4" />
-                  {busyAction === 'launch' ? `${text.launch}...` : text.launch}
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
       {toast ? <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-lg border bg-background px-4 py-3 text-sm shadow-lg">{toast}</div> : null}
-    </div>
+    </>
   )
 }
 

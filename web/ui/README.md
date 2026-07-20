@@ -1,32 +1,31 @@
-# React + TypeScript + Vite
+# XYolo UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This frontend is the React + TypeScript console used by `xyolo web`.
 
-Currently, two official plugins are available:
+## Layout model
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The app shell follows a 1Panel-style left-right workspace:
 
-## React Compiler
+- The left sidebar is the primary navigation for datasets, training, models, evaluation, and deploy
+- The sidebar can be collapsed, and the preference is persisted in a browser cookie
+- The right pane owns the active page content
+- In the training section, **New / List / Template** stay as secondary tabs in the content header instead of top-level navigation
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Development
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+cd web/ui
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The Vite dev server proxies `/api` and `/logs` to `http://127.0.0.1:8860`.
+
+## Build
+
+```bash
+cd web/ui
+corepack pnpm build
+```
+
+The production build writes static assets into `src/xyolo/static/` so they can be bundled into the Python package.
